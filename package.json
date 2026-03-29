@@ -1,0 +1,32 @@
+{
+  "name": "sunmao-vision",
+  "version": "0.1.0",
+  "private": true,
+  "description": "榫卯视界 — 集装箱三维可视化自动堆叠系统",
+  "license": "MIT",
+  "author": "Sunmao Vision Contributors",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-username/sunmao-vision.git"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @sunmao/web dev",
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "lint": "eslint . --ext .ts,.tsx",
+    "format": "prettier --write \"**/*.{ts,tsx,json,md}\"",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "devDependencies": {
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "eslint": "^9.0.0",
+    "prettier": "^3.4.0",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "packageManager": "pnpm@9.15.0"
+}

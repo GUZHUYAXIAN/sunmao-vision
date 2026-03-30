@@ -5,6 +5,12 @@ node_modules/
 dist/
 *.tsbuildinfo
 
+# Prevent compiled artifacts from polluting src/ directories
+packages/*/src/**/*.js
+packages/*/src/**/*.js.map
+packages/*/src/**/*.d.ts
+packages/*/src/**/*.d.ts.map
+
 # IDE
 .vscode/
 .idea/

@@ -29,8 +29,8 @@ export type {
   RotationVariant,
 } from "./geometry";
 export {
+  GEOMETRY_EPSILON_MM,
   makeAabb,
-  aabbFromSlot,
   aabbVolume,
   aabbIntersects,
   isWithinContainer,
@@ -43,6 +43,9 @@ export {
 export { sortCargoByVolumeAndWeight, computeCargoVolume } from "./sorting";
 
 export {
+  computeBottomSupportCheck,
+  hasSufficientBottomSupport,
+  checkBottomSupportStability,
   checkPayloadCompliance,
   computeCenterOfGravity,
   checkGravityStability,

@@ -9,7 +9,7 @@
  */
 
 import type { CargoTemplate, Container, Placement, Warning } from "@sunmao/contracts";
-import { type Aabb } from "./geometry";
+import { GEOMETRY_EPSILON_MM, type Aabb } from "./geometry";
 
 // ─────────────────────────────────────────────
 // 内部类型
@@ -22,6 +22,120 @@ type CenterOfGravity = {
   readonly y: number;
   readonly z: number;
 };
+
+/** 单个货物底面支撑校验结果 */
+export type BottomSupportCheck = {
+  /** 底面总面积（mm²） */
+  readonly footprintArea: number;
+  /** 被下方支撑面的有效支撑面积（mm²） */
+  readonly supportedArea: number;
+  /** 底面支撑率（0-1） */
+  readonly supportRatio: number;
+  /** 是否直接落在地板上 */
+  readonly supportedByFloor: boolean;
+  /** 货物底面几何中心是否落在支撑投影内 */
+  readonly isCenterSupported: boolean;
+  /** 实际参与支撑的下层货物数量 */
+  readonly supportingItems: number;
+};
+
+function computeOverlapLength(
+  rangeStartA: number,
+  rangeEndA: number,
+  rangeStartB: number,
+  rangeEndB: number,
+): number {
+  const overlapLength = Math.min(rangeEndA, rangeEndB) - Math.max(rangeStartA, rangeStartB);
+  return overlapLength > GEOMETRY_EPSILON_MM ? overlapLength : 0;
+}
+
+function isSupportPlaneAligned(candidateBottomY: number, supportTopY: number): boolean {
+  return Math.abs(candidateBottomY - supportTopY) <= GEOMETRY_EPSILON_MM;
+}
+
+export function computeBottomSupportCheck(
+  box: Aabb,
+  occupiedAabbs: readonly Aabb[],
+): BottomSupportCheck {
+  const footprintArea = (box.maxX - box.minX) * (box.maxZ - box.minZ);
+
+  if (box.minY <= GEOMETRY_EPSILON_MM) {
+    return {
+      footprintArea,
+      supportedArea: footprintArea,
+      supportRatio: 1,
+      supportedByFloor: true,
+      isCenterSupported: true,
+      supportingItems: 0,
+    };
+  }
+
+  const footprintCenterX = (box.minX + box.maxX) / 2;
+  const footprintCenterZ = (box.minZ + box.maxZ) / 2;
+
+  let supportedArea = 0;
+  let isCenterSupported = false;
+  let supportingItems = 0;
+
+  for (const occupiedBox of occupiedAabbs) {
+    if (!isSupportPlaneAligned(box.minY, occupiedBox.maxY)) {
+      continue;
+    }
+
+    const overlapLengthX = computeOverlapLength(
+      box.minX,
+      box.maxX,
+      occupiedBox.minX,
+      occupiedBox.maxX,
+    );
+    const overlapWidthZ = computeOverlapLength(
+      box.minZ,
+      box.maxZ,
+      occupiedBox.minZ,
+      occupiedBox.maxZ,
+    );
+
+    if (overlapLengthX === 0 || overlapWidthZ === 0) {
+      continue;
+    }
+
+    supportedArea += overlapLengthX * overlapWidthZ;
+    supportingItems += 1;
+
+    if (
+      footprintCenterX >= occupiedBox.minX - GEOMETRY_EPSILON_MM &&
+      footprintCenterX <= occupiedBox.maxX + GEOMETRY_EPSILON_MM &&
+      footprintCenterZ >= occupiedBox.minZ - GEOMETRY_EPSILON_MM &&
+      footprintCenterZ <= occupiedBox.maxZ + GEOMETRY_EPSILON_MM
+    ) {
+      isCenterSupported = true;
+    }
+  }
+
+  const clampedSupportedArea = Math.min(footprintArea, supportedArea);
+  const supportRatio = footprintArea === 0 ? 0 : clampedSupportedArea / footprintArea;
+
+  return {
+    footprintArea,
+    supportedArea: clampedSupportedArea,
+    supportRatio,
+    supportedByFloor: false,
+    isCenterSupported,
+    supportingItems,
+  };
+}
+
+export function hasSufficientBottomSupport(
+  box: Aabb,
+  occupiedAabbs: readonly Aabb[],
+  minimumSupportRatio = 1,
+): boolean {
+  const supportCheck = computeBottomSupportCheck(box, occupiedAabbs);
+  return (
+    supportCheck.supportRatio + GEOMETRY_EPSILON_MM >= minimumSupportRatio &&
+    supportCheck.isCenterSupported
+  );
+}
 
 // ─────────────────────────────────────────────
 // 重量合规检测
@@ -165,6 +279,46 @@ export function checkGravityStability(
       code: "COG_LONGITUDINAL_OFFSET",
       message: `集装箱 "${container.name}" 重心纵向偏移 ${longitudinalOffset.toFixed(0)}mm，超过安全阈值 ${LONGITUDINAL_THRESHOLD.toFixed(0)}mm（长度15%）。建议调整前后载重分布。`,
       severity: "info",
+    });
+  }
+
+  return warnings;
+}
+
+/**
+ * 检测每个已放置货物的底面是否被完整支撑。
+ *
+ * 这是对“整柜重心”之外的局部稳定性补充：
+ *   - 整柜重心正常，并不代表某一件上层货物没有悬空
+ *   - 若某件货物底面支撑不足，则直接产生 error 级警告
+ */
+export function checkBottomSupportStability(
+  placements: ReadonlyArray<Placement>,
+  aabbs: ReadonlyArray<Aabb>,
+  container: Container,
+  checkEnabled: boolean,
+): Warning[] {
+  if (!checkEnabled) return [];
+
+  const warnings: Warning[] = [];
+
+  for (let itemIndex = 0; itemIndex < placements.length; itemIndex++) {
+    const placement = placements[itemIndex];
+    const aabb = aabbs[itemIndex];
+
+    if (placement === undefined || aabb === undefined) {
+      continue;
+    }
+
+    const supportCheck = computeBottomSupportCheck(aabb, aabbs);
+    if (supportCheck.supportRatio + GEOMETRY_EPSILON_MM >= 1) {
+      continue;
+    }
+
+    warnings.push({
+      code: "BOTTOM_SUPPORT_INSUFFICIENT",
+      message: `集装箱 "${container.name}" 中货物 cargoIndex=${placement.cargoIndex} / instanceIndex=${placement.instanceIndex} 的底面支撑率仅为 ${(supportCheck.supportRatio * 100).toFixed(1)}%，存在悬空风险。`,
+      severity: "error",
     });
   }
 

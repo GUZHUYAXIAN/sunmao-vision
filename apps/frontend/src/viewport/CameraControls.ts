@@ -3,11 +3,12 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 
 export class CameraControls {
   public orbControls: OrbitControls;
-  private domElement: HTMLElement;
-  private camera: THREE.PerspectiveCamera;
-  private scene: THREE.Scene;
+  private domElement: HTMLElement | null;
+  private camera: THREE.PerspectiveCamera | null;
+  private scene: THREE.Scene | null;
   private raycaster = new THREE.Raycaster();
   private pointer = new THREE.Vector2();
+  private isDisposed = false;
 
   private isVKeyPressed = false;
   private isCtrlKeyPressed = false;
@@ -38,6 +39,10 @@ export class CameraControls {
   }
 
   private attachEvents() {
+    if (!this.domElement) {
+      return;
+    }
+
     window.addEventListener('keydown', this.onKeyDown);
     window.addEventListener('keyup', this.onKeyUp);
     // 使用 pointerdown 以更好支持触控和鼠标
@@ -45,12 +50,20 @@ export class CameraControls {
   }
 
   private detachEvents() {
+    if (!this.domElement) {
+      return;
+    }
+
     window.removeEventListener('keydown', this.onKeyDown);
     window.removeEventListener('keyup', this.onKeyUp);
     this.domElement.removeEventListener('pointerdown', this.onPointerDown);
   }
 
   private onKeyDown = (e: KeyboardEvent) => {
+    if (this.isDisposed) {
+      return;
+    }
+
     if (e.key.toLowerCase() === 'v') this.isVKeyPressed = true;
     if (e.key === 'Control') {
       this.isCtrlKeyPressed = true;
@@ -63,6 +76,10 @@ export class CameraControls {
   };
 
   private onKeyUp = (e: KeyboardEvent) => {
+    if (this.isDisposed) {
+      return;
+    }
+
     if (e.key.toLowerCase() === 'v') this.isVKeyPressed = false;
     if (e.key === 'Control') {
       this.isCtrlKeyPressed = false;
@@ -85,6 +102,10 @@ export class CameraControls {
   }
 
   private onPointerDown = (e: PointerEvent) => {
+    if (this.isDisposed) {
+      return;
+    }
+
     // V + 左键 = 重设旋转中心点
     if (e.button === 0 && this.isVKeyPressed) {
       this.setRotationCenter(e);
@@ -92,6 +113,10 @@ export class CameraControls {
   };
 
   private setRotationCenter(e: PointerEvent) {
+    if (!this.domElement || !this.camera || !this.scene) {
+      return;
+    }
+
     const rect = this.domElement.getBoundingClientRect();
     this.pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
     this.pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
@@ -101,7 +126,9 @@ export class CameraControls {
     const intersects = this.raycaster.intersectObjects(this.scene.children, true);
     
     const hit = intersects.find(
-      (i) => !(i.object instanceof THREE.GridHelper) && !(i.object instanceof THREE.AxesHelper)
+      (intersection: THREE.Intersection) =>
+        !(intersection.object instanceof THREE.GridHelper) &&
+        !(intersection.object instanceof THREE.AxesHelper)
     );
     
     if (hit) {
@@ -110,12 +137,27 @@ export class CameraControls {
     }
   }
 
-  public update() {
-    this.orbControls.update();
+  public update(): boolean {
+    if (this.isDisposed) {
+      return false;
+    }
+
+    return this.orbControls.update();
   }
 
   public dispose() {
+    if (this.isDisposed) {
+      return;
+    }
+
+    this.isDisposed = true;
     this.detachEvents();
     this.orbControls.dispose();
+    this.scene = null;
+    this.camera = null;
+    this.domElement = null;
+    this.isVKeyPressed = false;
+    this.isCtrlKeyPressed = false;
+    this.isShiftKeyPressed = false;
   }
 }

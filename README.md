@@ -1,21 +1,15 @@
-<p align="center">
-  <img src="https://img.shields.io/badge/Status-Refactoring-orange?style=for-the-badge" alt="Status: Refactoring" />
-  <img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License: MIT" />
-  <img src="https://img.shields.io/badge/PRs-Welcome-brightgreen?style=for-the-badge" alt="PRs Welcome" />
-  <img src="https://img.shields.io/badge/Made_With-Three.js-black?style=for-the-badge&logo=three.js" alt="Three.js" />
-  <img src="https://img.shields.io/badge/TypeScript-5.x-blue?style=for-the-badge&logo=typescript" alt="TypeScript" />
-</p>
+# 榫卯视界 Sunmao Vision
 
-<h1 align="center">榫卯视界 Sunmao Vision</h1>
+![Status: Refactoring](https://img.shields.io/badge/Status-Refactoring-orange?style=for-the-badge)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](./LICENSE)
+![PRs Welcome](https://img.shields.io/badge/PRs-Welcome-brightgreen?style=for-the-badge)
+![Three.js](https://img.shields.io/badge/Made_With-Three.js-black?style=for-the-badge&logo=three.js)
+![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue?style=for-the-badge&logo=typescript)
 
-<p align="center">
-  <strong>🏗️ 当两千年前的中国榫卯智慧，遇上现代 3D 数字孪生</strong>
-</p>
+> 🏗️ 当两千年前的中国榫卯智慧，遇上现代 3D 数字孪生
 
-<p align="center">
-  <em>一个开源的集装箱三维可视化自动堆叠系统</em><br/>
-  <em>An open-source 3D container loading optimization & visualization system</em>
-</p>
+*一个开源的集装箱三维可视化自动堆叠系统*  
+*An open-source 3D container loading optimization & visualization system*
 
 ---
 
@@ -35,7 +29,7 @@
 ## ✨ 核心特性 · Features
 
 | 特性 | 描述 |
-|---|---|
+| --- | --- |
 | 🧮 **智能求解器** | "计算与渲染分离"架构——纯算法后端，像有限元求解器一样输入参数、输出最优方案 |
 | 🎨 **3D 实时可视化** | 基于 Three.js 的浏览器端三维渲染，支持旋转、缩放、平移、物体拾取等交互 |
 | 📐 **PDF → 3D 模型** | 将工程图纸自动转换为 OBJ 三维模型，并支持尺寸标定校准 |
@@ -49,7 +43,7 @@
 
 ## 🏛️ 架构 · Architecture
 
-```
+```text
 sunmao-vision/
 ├── packages/
 │   ├── contracts/          📜 统一数据契约 (Zod Schemas)
@@ -66,7 +60,7 @@ sunmao-vision/
 **设计哲学**：借鉴有限元分析软件（ANSYS / Abaqus）的经典架构——
 
 | 有限元 | 榫卯视界 |
-|---|---|
+| --- | --- |
 | 求解器 (Solver) | `packages/solver` |
 | 前/后处理器 | `apps/web` |
 | 数据文件 (.inp / .odb) | `packages/contracts` |
@@ -102,6 +96,7 @@ sunmao-vision/
 **这是一个开放的项目，我们热烈欢迎每一位贡献者！**
 
 无论你是：
+
 - 🧊 **3D 图形极客** — 帮助优化渲染管线和 LOD 策略
 - 🧮 **算法高手** — 挑战堆叠求解器的空间利用率极限
 - 🎨 **前端达人** — 打造丝滑的交互体验
@@ -121,7 +116,7 @@ sunmao-vision/
 ## 🛠️ 技术栈 · Tech Stack
 
 | 领域 | 技术 |
-|---|---|
+| --- | --- |
 | 前端框架 | React 19 + TypeScript 5 |
 | 构建工具 | Vite 6 |
 | 3D 引擎 | Three.js |
@@ -151,7 +146,5 @@ sunmao-vision/
 
 ---
 
-<p align="center">
-  <strong>⭐ 如果这个项目对你有启发，请给一颗 Star！</strong><br/>
-  <strong>⭐ If this project inspires you, please give it a Star!</strong>
-</p>
+**⭐ 如果这个项目对你有启发，请给一颗 Star！**  
+**⭐ If this project inspires you, please give it a Star!**

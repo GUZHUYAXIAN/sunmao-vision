@@ -174,7 +174,7 @@ const handleItemClick = useCallback((
 ### 2.1 目录结构约定
 
 | 目录 | 内容 | 命名方式 |
-|---|---|---|
+| --- | --- | --- |
 | `components/` | React 组件 | `PascalCase.tsx` |
 | `hooks/` | 自定义 Hooks | `camelCase.ts`（以 `use` 前缀） |
 | `dal/` | 数据访问层 | `camelCase.ts` |
@@ -209,7 +209,7 @@ import "./styles/workspace.css";
 ### 3.1 测试策略
 
 | 层级 | 覆盖范围 | 工具 |
-|---|---|---|
+| --- | --- | --- |
 | 单元测试 | `packages/contracts` 的 schema 验证 | Vitest |
 | 单元测试 | `packages/solver` 的算法逻辑 | Vitest |
 | 组件测试 | React 组件的渲染和交互 | Vitest + Testing Library |
@@ -250,7 +250,7 @@ describe("packer", () => {
 
 ### 4.1 分支命名
 
-```
+```text
 main                          ← 主分支，始终可发布
 ├── feat/monorepo-setup       ← 新功能
 ├── feat/solver-packer        ← 新功能
@@ -262,7 +262,7 @@ main                          ← 主分支，始终可发布
 
 ### 4.2 提交信息格式
 
-```
+```text
 <类型>(<范围>): <简短描述>
 
 类型:
@@ -289,7 +289,7 @@ main                          ← 主分支，始终可发布
 
 ### 4.3 PR 流程
 
-```
+```text
 1. 创建 Issue（描述需求/Bug）
 2. 从 main 创建功能分支
 3. 开发 + 测试
@@ -306,7 +306,7 @@ main                          ← 主分支，始终可发布
 ### 5.1 前置要求
 
 | 工具 | 最低版本 | 用途 |
-|---|---|---|
+| --- | --- | --- |
 | Node.js | 20.x | 运行环境 |
 | pnpm | 10.x | 包管理器 |
 | Git | 2.40+ | 版本控制 |

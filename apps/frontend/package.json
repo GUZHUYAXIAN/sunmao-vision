@@ -1,0 +1,22 @@
+{
+  "name": "@sunmao/frontend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Sunmao Vision 3D Rendering Engine",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "three": "^0.170.0",
+    "@sunmao/contracts": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@types/three": "^0.170.0",
+    "typescript": "^5.7.0"
+  }
+}

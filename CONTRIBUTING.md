@@ -47,20 +47,20 @@ git checkout -b docs/improve-readme
 git checkout -b refactor/dal-interface
 ```
 
-| 前缀 | 用途 |
-|---|---|
-| `feat/` | 新功能 |
-| `fix/` | Bug 修复 |
-| `docs/` | 文档变更 |
+| 前缀        | 用途                   |
+| ----------- | ---------------------- |
+| `feat/`     | 新功能                 |
+| `fix/`      | Bug 修复               |
+| `docs/`     | 文档变更               |
 | `refactor/` | 重构（不改变外部行为） |
-| `test/` | 测试相关 |
-| `chore/` | 构建/工具配置 |
+| `test/`     | 测试相关               |
+| `chore/`    | 构建/工具配置          |
 
 ### Step 4: 开发与提交
 
 #### 提交信息格式
 
-```
+```text
 <类型>(<范围>): <简短描述>
 
 示例:
@@ -72,12 +72,12 @@ git checkout -b refactor/dal-interface
 
 **范围 (scope)** 对应 Monorepo 中的包名：
 
-| 范围 | 对应目录 |
-|---|---|
+| 范围        | 对应目录              |
+| ----------- | --------------------- |
 | `contracts` | `packages/contracts/` |
-| `solver` | `packages/solver/` |
-| `web` | `apps/web/` |
-| `repo` | 仓库根级文件 |
+| `solver`    | `packages/solver/`    |
+| `web`       | `apps/web/`           |
+| `repo`      | 仓库根级文件          |
 
 #### 提交频率
 
@@ -122,6 +122,7 @@ git push origin feat/你的分支名
 本项目涉及**物理堆叠**——货物的碰撞检测、重心稳定性、空间利用率。这不是普通的 CRUD 应用。
 
 **我会严格验证**：
+
 - 碰撞检测是否有遗漏（货物之间、货物与集装箱壁之间）
 - 重量计算是否正确（净重、毛重、扎带重量）
 - 放置坐标是否在集装箱边界内
@@ -132,6 +133,7 @@ git push origin feat/你的分支名
 所有涉及 3D 渲染或 UI 交互的 PR，**必须在 PR 描述中附上截图或录屏**。
 
 我会检查：
+
 - 3D 场景中的物体是否正确渲染
 - 交互操作是否流畅
 - 没有视觉 Bug（闪烁、穿模、Z-fighting 等）
@@ -146,7 +148,7 @@ git push origin feat/你的分支名
 
 ## 📁 项目结构速查
 
-```
+```text
 sunmao-vision/
 ├── packages/
 │   ├── contracts/     📜 Zod Schema 数据契约（零 UI 依赖）

@@ -1,7 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { CameraControls } from './CameraControls';
-import type { Container } from '@sunmao/contracts';
+import { useProjectStore } from '../stores/useProjectStore';
 
 type MaterialWithUniforms = THREE.Material & {
   [key: string]: unknown;
@@ -89,12 +89,10 @@ const disposeSceneGraph = (scene: THREE.Scene) => {
   scene.clear();
 };
 
-export interface Viewport3DProps {
-  // 预留一个能接收标准 Zod 契约数据的入口函数
-  containers?: Container[];
-}
-
-export const Viewport3D: React.FC<Viewport3DProps> = ({ containers = [] }) => {
+export const Viewport3D: React.FC = () => {
+  const { project, solveResult, selectedIds } = useProjectStore();
+  const containers = project?.containers || [];
+  const cargoList = project?.cargoList || [];
   const containerRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const requestRenderRef = useRef<() => void>(() => undefined);
@@ -197,11 +195,53 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({ containers = [] }) => {
     };
     window.addEventListener('resize', handleResize);
 
+    const raycaster = new THREE.Raycaster();
+    const mouse = new THREE.Vector2();
+
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.button !== 0 || !containerGroupRef.current || !containerRef.current) return;
+      
+      const rect = containerRef.current.getBoundingClientRect();
+      const x = event.clientX - rect.left;
+      const y = event.clientY - rect.top;
+      
+      mouse.x = (x / rect.width) * 2 - 1;
+      mouse.y = -(y / rect.height) * 2 + 1;
+
+      raycaster.setFromCamera(mouse, camera);
+
+      const intersects = raycaster.intersectObjects(containerGroupRef.current.children, true);
+      
+      let clickedCargoId: string | null = null;
+      for (const intersect of intersects) {
+        let obj: THREE.Object3D | null = intersect.object;
+        while (obj) {
+          if (obj.userData?.isCargo) {
+            clickedCargoId = obj.userData.cargoId;
+            break;
+          }
+          obj = obj.parent;
+        }
+        if (clickedCargoId) break;
+      }
+
+      const { setSelection } = useProjectStore.getState();
+      if (clickedCargoId) {
+        // Option to handle Ctrl/Shift click could be added here, currently just single select
+        setSelection(new Set([clickedCargoId]));
+      } else {
+        setSelection(new Set());
+      }
+    };
+
+    renderer.domElement.addEventListener('pointerdown', onPointerDown);
+
     // 组件卸载清理
     return () => {
       isDisposed = true;
       requestRenderRef.current = () => undefined;
       window.removeEventListener('resize', handleResize);
+      renderer.domElement.removeEventListener('pointerdown', onPointerDown);
       controls.orbControls.removeEventListener('change', requestRender);
       if (animationFrameId !== null) {
         cancelAnimationFrame(animationFrameId);
@@ -225,72 +265,144 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({ containers = [] }) => {
     if (!containerGroupRef.current || !containers) return;
 
     const group = containerGroupRef.current;
-    const currentMap = containerMeshesRef.current;
+    const currentMap = containerMeshesRef.current as Map<string, THREE.Group | THREE.Mesh>;
     const nextIds = new Set(containers.map((c: any) => c.id));
     
     // 1. 找出需要卸载的旧节点
-    const toRemove: THREE.Mesh[] = [];
-    currentMap.forEach((mesh: THREE.Mesh, id: string) => {
+    const toRemove: THREE.Object3D[] = [];
+    currentMap.forEach((obj, id) => {
       if (!nextIds.has(id)) {
-        toRemove.push(mesh);
+        toRemove.push(obj);
         currentMap.delete(id);
       }
     });
 
     if (toRemove.length > 0) {
-      // 巧用独立 Scene，复用全局的安全 disposeSceneGraph 防止显存泄漏
       const tempScene = new THREE.Scene();
-      toRemove.forEach((mesh) => {
-        group.remove(mesh);
-        tempScene.add(mesh);
+      toRemove.forEach((obj) => {
+        group.remove(obj);
+        tempScene.add(obj);
       });
       disposeSceneGraph(tempScene);
     }
 
     // 2. 挂载或更新新节点
     let hasChanges = toRemove.length > 0;
-    
-    // 暂时的简单排列：沿 X 轴间距排列
     let currentX = 0;
     
-    containers.forEach((c: any) => {
-      let mesh = currentMap.get(c.id);
-      if (!mesh) {
-        // 创建立方体 (根据常见认知：x为长 length，y为高 height，z为宽 width)
-        const geometry = new THREE.BoxGeometry(c.length, c.height, c.width);
-        const material = new THREE.MeshStandardMaterial({
-          color: 0x3399ff,
-          transparent: true,
-          opacity: 0.25,
-          side: THREE.DoubleSide,
-        });
-        mesh = new THREE.Mesh(geometry, material);
-
-        const edgesGeom = new THREE.EdgesGeometry(geometry);
-        const lineMat = new THREE.LineBasicMaterial({ color: 0x2266cc });
-        const line = new THREE.LineSegments(edgesGeom, lineMat);
-        mesh.add(line);
-
-        group.add(mesh);
-        currentMap.set(c.id, mesh);
-        hasChanges = true;
-      }
+    containers.forEach((c) => {
+      let containerRoot = currentMap.get(c.id) as THREE.Group | undefined;
       
-      // 更新位置，相邻排开，增加1000mm间距
-      mesh.position.set(currentX + c.length / 2, c.height / 2, 0);
+      // We will rebuild the group if solveResult changes (or simply clear and recreate its contents).
+      // For simplicity in this mock-up stage: we just re-create things if they are missing or if we want to update.
+      // To strictly react to solveResult, we can reconstruct the inner contents every time.
+      if (containerRoot) {
+        // If containerRoot exists, we can remove it and recreate to easily handle placements
+        group.remove(containerRoot);
+        const tempScene = new THREE.Scene();
+        tempScene.add(containerRoot);
+        disposeSceneGraph(tempScene);
+      }
+
+      containerRoot = new THREE.Group();
+      
+      // 集装箱本体边框和外形
+      const geometry = new THREE.BoxGeometry(c.length, c.height, c.width);
+      const material = new THREE.MeshStandardMaterial({
+        color: 0x3399ff,
+        transparent: true,
+        opacity: 0.15,
+        side: THREE.DoubleSide,
+        depthWrite: false, // 避免挡住内部
+      });
+      const containerMesh = new THREE.Mesh(geometry, material);
+      const edgesGeom = new THREE.EdgesGeometry(geometry);
+      const lineMat = new THREE.LineBasicMaterial({ color: 0x2266cc, opacity: 0.5, transparent: true });
+      const line = new THREE.LineSegments(edgesGeom, lineMat);
+      containerMesh.add(line);
+      // 将 containerMesh 中心从 (0,0,0) 偏移到 (l/2, h/2, w/2) 以便其角对齐于 containerRoot 的 (0,0,0)
+      containerMesh.position.set(c.length / 2, c.height / 2, c.width / 2);
+      
+      containerRoot.add(containerMesh);
+
+      // 如果有求解结果，在此集装箱坐标系下摆放货物
+      if (solveResult?.success) {
+        solveResult.placements.forEach((placement) => {
+          if (placement.containerId !== c.id) return;
+          const cargo = cargoList[placement.cargoIndex];
+          if (!cargo) return;
+
+          // box dimensions
+          const [l, w, h] = [cargo.dimensions.length, cargo.dimensions.width, cargo.dimensions.height];
+          
+          const cargoGeo = new THREE.BoxGeometry(l, h, w);
+          // 将 BoxGeometry 中心对齐到AABB的最小角: 即 +length/2, +height/2, +width/2
+          cargoGeo.translate(l / 2, h / 2, w / 2);
+
+          const cargoMat = new THREE.MeshStandardMaterial({
+            color: cargo.color,
+            transparent: false,
+            roughness: 0.6,
+            metalness: 0.1,
+          });
+          
+          const cargoId = `cargo_${placement.cargoIndex}_${placement.instanceIndex}`;
+          const isSelected = selectedIds.has(cargoId);
+          if (isSelected) {
+            cargoMat.emissive.setHex(0x555555);
+            cargoMat.opacity = 1.0;
+            cargoMat.transparent = false;
+          } else if (selectedIds.size > 0) {
+            cargoMat.opacity = 0.4;
+            cargoMat.transparent = true;
+          }
+          
+          const cargoMesh = new THREE.Mesh(cargoGeo, cargoMat);
+          cargoMesh.userData = { isCargo: true, cargoId };
+          
+          // 给货物加上黑色边线方便分辨
+          const cargoEdges = new THREE.EdgesGeometry(cargoGeo);
+          const cargoLine = new THREE.LineSegments(cargoEdges, new THREE.LineBasicMaterial({ color: isSelected ? 0xffffff : 0x000000 }));
+          cargoMesh.add(cargoLine);
+
+          // 应用姿态: 旋转
+          const [rx, ry, rz] = placement.rotation;
+          cargoMesh.rotation.set(
+            THREE.MathUtils.degToRad(rx),
+            THREE.MathUtils.degToRad(ry),
+            THREE.MathUtils.degToRad(rz)
+          );
+          
+          // 应用位置: AABB 最小角坐标
+          const [px, py, pz] = placement.position;
+          // Note: our local space maps Y to height. The position [x,y,z] from solver might be [l,w,h] or [x,y,z] where Z is height in real world?
+          // If the solver assumes Z is UP, we might need to swap Y and Z here.
+          // In standard solver config: x=length, y=width, z=height? Or X=length, Y=height, Z=width?
+          // Let's assume the solver uses (X=length, Y=height, Z=width) for simplicity, or we check the order.
+          cargoMesh.position.set(px, py, pz);
+
+          containerRoot!.add(cargoMesh);
+        });
+      }
+
+      group.add(containerRoot);
+      currentMap.set(c.id, containerRoot as any);
+      hasChanges = true;
+      
+      // 更新该集装箱根坐标位置，相邻排开，增加1000mm间距
+      containerRoot.position.set(currentX, 0, 0);
       currentX += c.length + 1000;
     });
 
     if (hasChanges) {
       requestRenderRef.current();
     }
-  }, [containers]);
+  }, [containers, cargoList, solveResult, selectedIds]);
 
   return (
     <div 
       ref={containerRef} 
       className="viewport-3d-container"
-      style={{ width: '100%', height: '100%', minHeight: '600px', backgroundColor: '#f7f2e8', overflow: 'hidden' }} 
     />
   );
 };

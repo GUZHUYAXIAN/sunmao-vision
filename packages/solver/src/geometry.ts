@@ -60,6 +60,33 @@ export type RotationVariant = {
   readonly width: number;
 };
 
+/**
+ * 几何比较时使用的绝对容差（mm）。
+ *
+ * 不能直接使用裸 `Number.EPSILON`：
+ *   1. 业务坐标以 mm 为单位，量级通常远大于 1
+ *   2. JS 浮点误差会在多次加减后累积到 `1e-13 ~ 1e-10`
+ *
+ * 这里采用“绝对下限 + 相对缩放”策略，既避免面贴面误判重叠，
+ * 也避免把真实重叠吞掉。
+ */
+export const GEOMETRY_EPSILON_MM = 1e-6;
+
+function computeGeometryTolerance(...values: number[]): number {
+  const largestMagnitude = Math.max(1, ...values.map((value) => Math.abs(value)));
+  return Math.max(GEOMETRY_EPSILON_MM, largestMagnitude * Number.EPSILON * 16);
+}
+
+function axisOverlaps(
+  minA: number,
+  maxA: number,
+  minB: number,
+  maxB: number,
+): boolean {
+  const tolerance = computeGeometryTolerance(minA, maxA, minB, maxB);
+  return minA < maxB - tolerance && maxA > minB + tolerance;
+}
+
 // ─────────────────────────────────────────────
 // AABB 工厂与基本操作
 // ─────────────────────────────────────────────
@@ -119,12 +146,9 @@ export function aabbVolume(aabb: Aabb): number {
  */
 export function aabbIntersects(boxA: Aabb, boxB: Aabb): boolean {
   return (
-    boxA.minX < boxB.maxX &&
-    boxA.maxX > boxB.minX &&
-    boxA.minY < boxB.maxY &&
-    boxA.maxY > boxB.minY &&
-    boxA.minZ < boxB.maxZ &&
-    boxA.maxZ > boxB.minZ
+    axisOverlaps(boxA.minX, boxA.maxX, boxB.minX, boxB.maxX) &&
+    axisOverlaps(boxA.minY, boxA.maxY, boxB.minY, boxB.maxY) &&
+    axisOverlaps(boxA.minZ, boxA.maxZ, boxB.minZ, boxB.maxZ)
   );
 }
 
@@ -142,13 +166,25 @@ export function isWithinContainer(
   containerHeight: number,
   containerWidth: number,
 ): boolean {
+  const tolerance = computeGeometryTolerance(
+    box.minX,
+    box.minY,
+    box.minZ,
+    box.maxX,
+    box.maxY,
+    box.maxZ,
+    containerLength,
+    containerHeight,
+    containerWidth,
+  );
+
   return (
-    box.minX >= 0 &&
-    box.minY >= 0 &&
-    box.minZ >= 0 &&
-    box.maxX <= containerLength &&
-    box.maxY <= containerHeight &&
-    box.maxZ <= containerWidth
+    box.minX >= -tolerance &&
+    box.minY >= -tolerance &&
+    box.minZ >= -tolerance &&
+    box.maxX <= containerLength + tolerance &&
+    box.maxY <= containerHeight + tolerance &&
+    box.maxZ <= containerWidth + tolerance
   );
 }
 
@@ -230,20 +266,66 @@ export function deduplicateSlots(slots: FreeSlot[]): FreeSlot[] {
   return slots.filter((slot, selfIndex) => {
     return !slots.some((candidate, candidateIndex) => {
       if (candidateIndex === selfIndex) return false;
+
+      if (slotsEqual(candidate, slot)) {
+        return candidateIndex < selfIndex;
+      }
+
       return slotContains(candidate, slot);
     });
   });
 }
 
+function slotsEqual(slotA: FreeSlot, slotB: FreeSlot): boolean {
+  const tolerance = computeGeometryTolerance(
+    slotA.x,
+    slotA.y,
+    slotA.z,
+    slotA.length,
+    slotA.height,
+    slotA.width,
+    slotB.x,
+    slotB.y,
+    slotB.z,
+    slotB.length,
+    slotB.height,
+    slotB.width,
+  );
+
+  return (
+    Math.abs(slotA.x - slotB.x) <= tolerance &&
+    Math.abs(slotA.y - slotB.y) <= tolerance &&
+    Math.abs(slotA.z - slotB.z) <= tolerance &&
+    Math.abs(slotA.length - slotB.length) <= tolerance &&
+    Math.abs(slotA.height - slotB.height) <= tolerance &&
+    Math.abs(slotA.width - slotB.width) <= tolerance
+  );
+}
+
 /** 判断 outer 槽是否完全包含 inner 槽 */
 function slotContains(outer: FreeSlot, inner: FreeSlot): boolean {
+  const tolerance = computeGeometryTolerance(
+    outer.x,
+    outer.y,
+    outer.z,
+    outer.length,
+    outer.height,
+    outer.width,
+    inner.x,
+    inner.y,
+    inner.z,
+    inner.length,
+    inner.height,
+    inner.width,
+  );
+
   return (
-    outer.x <= inner.x &&
-    outer.y <= inner.y &&
-    outer.z <= inner.z &&
-    outer.x + outer.length >= inner.x + inner.length &&
-    outer.y + outer.height >= inner.y + inner.height &&
-    outer.z + outer.width >= inner.z + inner.width
+    outer.x <= inner.x + tolerance &&
+    outer.y <= inner.y + tolerance &&
+    outer.z <= inner.z + tolerance &&
+    outer.x + outer.length >= inner.x + inner.length - tolerance &&
+    outer.y + outer.height >= inner.y + inner.height - tolerance &&
+    outer.z + outer.width >= inner.z + inner.width - tolerance
   );
 }
 

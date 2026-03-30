@@ -19,6 +19,7 @@ import type { CargoTemplate, Container, Placement } from "@sunmao/contracts";
 import {
   type Aabb,
   type FreeSlot,
+  GEOMETRY_EPSILON_MM,
   type RotationVariant,
   deduplicateSlots,
   filterMinimalSlots,
@@ -28,6 +29,7 @@ import {
   makeAabb,
   slotsIntersect,
 } from "./geometry";
+import { hasSufficientBottomSupport } from "./weight-checker";
 
 // ─────────────────────────────────────────────
 // 内部类型
@@ -134,9 +136,9 @@ function findBestCandidate(
   for (const slot of freeSlots) {
     for (const variant of variants) {
       if (
-        variant.length > slot.length ||
-        variant.height > slot.height ||
-        variant.width > slot.width
+        variant.length > slot.length + GEOMETRY_EPSILON_MM ||
+        variant.height > slot.height + GEOMETRY_EPSILON_MM ||
+        variant.width > slot.width + GEOMETRY_EPSILON_MM
       ) {
         continue;
       }
@@ -152,6 +154,10 @@ function findBestCandidate(
       }
 
       if (hasAnyIntersection(candidateAabb, occupiedAabbs)) {
+        continue;
+      }
+
+      if (!hasSufficientBottomSupport(candidateAabb, occupiedAabbs)) {
         continue;
       }
 
@@ -196,42 +202,45 @@ function guillotineCut(
     }
 
     // X 轴左侧残余槽
-    if (occupied.x > slot.x) {
+    if (occupied.x > slot.x + GEOMETRY_EPSILON_MM) {
       nextSlots.push({ ...slot, length: occupied.x - slot.x });
     }
 
     // X 轴右侧残余槽
     const occupiedRight = occupied.x + occupied.length;
-    if (occupiedRight < slot.x + slot.length) {
+    const slotRight = slot.x + slot.length;
+    if (occupiedRight < slotRight - GEOMETRY_EPSILON_MM) {
       nextSlots.push({
         ...slot,
         x: occupiedRight,
-        length: slot.x + slot.length - occupiedRight,
+        length: slotRight - occupiedRight,
       });
     }
 
     // Y 轴上方残余槽（旧版 BoxStack 中存在，SmartContainer 中遗漏的方向）
     const occupiedTop = occupied.y + occupied.height;
-    if (occupiedTop < slot.y + slot.height) {
+    const slotTop = slot.y + slot.height;
+    if (occupiedTop < slotTop - GEOMETRY_EPSILON_MM) {
       nextSlots.push({
         ...slot,
         y: occupiedTop,
-        height: slot.y + slot.height - occupiedTop,
+        height: slotTop - occupiedTop,
       });
     }
 
     // Z 轴前侧残余槽
-    if (occupied.z > slot.z) {
+    if (occupied.z > slot.z + GEOMETRY_EPSILON_MM) {
       nextSlots.push({ ...slot, width: occupied.z - slot.z });
     }
 
     // Z 轴后侧残余槽
     const occupiedBack = occupied.z + occupied.width;
-    if (occupiedBack < slot.z + slot.width) {
+    const slotBack = slot.z + slot.width;
+    if (occupiedBack < slotBack - GEOMETRY_EPSILON_MM) {
       nextSlots.push({
         ...slot,
         z: occupiedBack,
-        width: slot.z + slot.width - occupiedBack,
+        width: slotBack - occupiedBack,
       });
     }
   }
@@ -294,19 +303,36 @@ export function packIntoContainer(
         continue;
       }
 
-      // 堆叠层数限制（简化实现：将容器高度划分为等高层）
-      if (config.maxStackLayers !== undefined) {
-        const layerHeight = containerHeight / config.maxStackLayers;
-        const validSlots = freeSlots.filter((slot) => slot.y < layerHeight * config.maxStackLayers!);
-        if (validSlots.length === 0) {
-          unplaced.push({
-            cargoIndex,
-            instanceIndex,
-            reason: `已达到最大堆叠层数限制（${config.maxStackLayers} 层）`,
-          });
-          continue;
-        }
-      }
+      // 堆叠层数限制
+      // 修复 Codex 发现的 P1 bug：
+      //   旧实现 slot.y < layerHeight * maxStackLayers 等价于 slot.y < containerHeight，
+      //   永远成立，从未真正拦截超限层。
+      //
+      // 正确语义：槽的底部 Y 坐标必须 < maxLayers 层的高度上限。
+      //   即不允许在 y >= layerHeight * maxStackLayers 的槽上放置新货物。
+      //   （每层高度 = 容器高度 / maxStackLayers，这是一种等高分层模型。）
+      //   注意：货物本身的高度无法限制，这里只限制"起始放置高度"。
+      const activeFreeSlots =
+        config.maxStackLayers !== undefined
+          ? (() => {
+              const singleLayerHeight = containerHeight / config.maxStackLayers;
+              const maxAllowedBottomY = singleLayerHeight * (config.maxStackLayers - 1);
+              const filtered = freeSlots.filter(
+                (slot) => slot.y <= maxAllowedBottomY + GEOMETRY_EPSILON_MM,
+              );
+              if (filtered.length === 0) {
+                unplaced.push({
+                  cargoIndex,
+                  instanceIndex,
+                  reason: `已达到最大堆叠层数限制（${config.maxStackLayers} 层），无可用层内起始槽`,
+                });
+                return null;
+              }
+              return filtered;
+            })()
+          : freeSlots;
+
+      if (activeFreeSlots === null) continue;
 
       const variants = getRotationVariants(
         template.dimensions.length,
@@ -315,13 +341,13 @@ export function packIntoContainer(
         config.allowRotation,
       );
 
-      const candidate = findBestCandidate(variants, freeSlots, occupiedAabbs, config);
+      const candidate = findBestCandidate(variants, activeFreeSlots, occupiedAabbs, config);
 
       if (candidate === null) {
         unplaced.push({
           cargoIndex,
           instanceIndex,
-          reason: "集装箱内无足够连续空间可放置本货物",
+          reason: "集装箱内无足够连续且受支撑的空间可放置本货物",
         });
         continue;
       }

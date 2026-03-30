@@ -3,6 +3,92 @@ import * as THREE from 'three';
 import { CameraControls } from './CameraControls';
 import type { Container } from '@sunmao/contracts';
 
+type MaterialWithUniforms = THREE.Material & {
+  [key: string]: unknown;
+  uniforms?: Record<string, { value?: unknown }>;
+};
+
+const disposeTextureValue = (value: unknown, disposedTextures: Set<THREE.Texture>) => {
+  if (!value) {
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    value.forEach((entry) => disposeTextureValue(entry, disposedTextures));
+    return;
+  }
+
+  if (typeof value !== 'object') {
+    return;
+  }
+
+  const textureCandidate = value as THREE.Texture;
+  if (!textureCandidate.isTexture || disposedTextures.has(textureCandidate)) {
+    return;
+  }
+
+  disposedTextures.add(textureCandidate);
+  textureCandidate.dispose();
+};
+
+const disposeMaterial = (
+  material: THREE.Material,
+  disposedMaterials: Set<THREE.Material>,
+  disposedTextures: Set<THREE.Texture>
+) => {
+  if (disposedMaterials.has(material)) {
+    return;
+  }
+
+  const materialWithUniforms = material as MaterialWithUniforms;
+
+  Object.values(materialWithUniforms).forEach((propertyValue) => {
+    disposeTextureValue(propertyValue, disposedTextures);
+  });
+
+  if (materialWithUniforms.uniforms) {
+    Object.values(materialWithUniforms.uniforms).forEach((uniform: any) => {
+      disposeTextureValue(uniform?.value, disposedTextures);
+    });
+  }
+
+  disposedMaterials.add(material);
+  material.dispose();
+};
+
+const disposeSceneGraph = (scene: THREE.Scene) => {
+  const disposedGeometries = new Set<THREE.BufferGeometry>();
+  const disposedMaterials = new Set<THREE.Material>();
+  const disposedTextures = new Set<THREE.Texture>();
+
+  disposeTextureValue(scene.background, disposedTextures);
+  disposeTextureValue(scene.environment, disposedTextures);
+
+  scene.traverse((object3D: any) => {
+    const renderableObject = object3D as THREE.Object3D & {
+      geometry?: THREE.BufferGeometry;
+      material?: THREE.Material | THREE.Material[];
+    };
+
+    if (renderableObject.geometry && !disposedGeometries.has(renderableObject.geometry)) {
+      disposedGeometries.add(renderableObject.geometry);
+      renderableObject.geometry.dispose();
+    }
+
+    if (!renderableObject.material) {
+      return;
+    }
+
+    const materials = Array.isArray(renderableObject.material)
+      ? renderableObject.material
+      : [renderableObject.material];
+
+    materials.forEach((material: any) => disposeMaterial(material, disposedMaterials, disposedTextures));
+  });
+
+  scene.clear();
+};
+
 export interface Viewport3DProps {
   // 预留一个能接收标准 Zod 契约数据的入口函数
   containers?: Container[];
@@ -11,9 +97,13 @@ export interface Viewport3DProps {
 export const Viewport3D: React.FC<Viewport3DProps> = ({ containers = [] }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
+  const requestRenderRef = useRef<() => void>(() => undefined);
+  const containerGroupRef = useRef<THREE.Group | null>(null);
+  const containerMeshesRef = useRef<Map<string, THREE.Mesh>>(new Map());
 
   useEffect(() => {
-    if (!containerRef.current) return;
+    const hostElement = containerRef.current;
+    if (!hostElement) return;
 
     // 1. 初始化场景
     const scene = new THREE.Scene();
@@ -23,7 +113,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({ containers = [] }) => {
     // 2. 初始化相机 (这里以 mm 为物理单位，所以相机位置和视距放大约 1000 倍)
     const camera = new THREE.PerspectiveCamera(
       55,
-      containerRef.current.clientWidth / containerRef.current.clientHeight,
+      hostElement.clientWidth / hostElement.clientHeight,
       10,      // 近裁剪面
       50000    // 远裁剪面: 可视范围达到 50m
     );
@@ -32,8 +122,8 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({ containers = [] }) => {
     // 3. 初始化渲染器
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.setSize(containerRef.current.clientWidth, containerRef.current.clientHeight);
-    containerRef.current.appendChild(renderer.domElement);
+    renderer.setSize(hostElement.clientWidth, hostElement.clientHeight, false);
+    hostElement.appendChild(renderer.domElement);
 
     // 4. 初始化基础光影
     const ambientLight = new THREE.AmbientLight(0xf6f1e7, 1.6);
@@ -58,51 +148,142 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({ containers = [] }) => {
     const axesHelper = new THREE.AxesHelper(2500); 
     scene.add(axesHelper);
 
+    const containerGroup = new THREE.Group();
+    containerGroup.name = 'containers-group';
+    scene.add(containerGroup);
+    containerGroupRef.current = containerGroup;
+
     // 6. 初始化相机控制类 (包含各类交互操作)
     const controls = new CameraControls(camera, renderer.domElement, scene);
 
-    // 7. 动画循环渲染
-    let animationFrameId: number;
-    const animate = () => {
-      animationFrameId = requestAnimationFrame(animate);
-      controls.update();
+    // 7. 按需渲染：只在交互、阻尼衰减或尺寸变化时申请一帧
+    let animationFrameId: number | null = null;
+    let isDisposed = false;
+
+    const renderFrame = () => {
+      animationFrameId = null;
+      if (isDisposed) {
+        return;
+      }
+
+      const stillChanging = controls.update();
       renderer.render(scene, camera);
+
+      if (stillChanging) {
+        requestRender();
+      }
     };
-    animate();
+
+    const requestRender = () => {
+      if (isDisposed || animationFrameId !== null) {
+        return;
+      }
+
+      animationFrameId = window.requestAnimationFrame(renderFrame);
+    };
+
+    requestRenderRef.current = requestRender;
+    controls.orbControls.addEventListener('change', requestRender);
+    requestRender();
 
     // 8. 处理窗口 Resize
     const handleResize = () => {
-      if (!containerRef.current) return;
+      if (isDisposed || !containerRef.current) return;
+
       camera.aspect = containerRef.current.clientWidth / containerRef.current.clientHeight;
       camera.updateProjectionMatrix();
-      renderer.setSize(containerRef.current.clientWidth, containerRef.current.clientHeight);
+      renderer.setSize(containerRef.current.clientWidth, containerRef.current.clientHeight, false);
+      requestRender();
     };
     window.addEventListener('resize', handleResize);
 
     // 组件卸载清理
     return () => {
+      isDisposed = true;
+      requestRenderRef.current = () => undefined;
       window.removeEventListener('resize', handleResize);
-      cancelAnimationFrame(animationFrameId);
+      controls.orbControls.removeEventListener('change', requestRender);
+      if (animationFrameId !== null) {
+        cancelAnimationFrame(animationFrameId);
+      }
       controls.dispose();
+      disposeSceneGraph(scene);
+      renderer.renderLists.dispose();
       renderer.dispose();
-      // 清空场景
-      scene.clear();
-      if (containerRef.current && containerRef.current.contains(renderer.domElement)) {
-        containerRef.current.removeChild(renderer.domElement);
+      renderer.forceContextLoss();
+      sceneRef.current = null;
+      containerGroupRef.current = null;
+      containerMeshesRef.current.clear();
+      if (hostElement.contains(renderer.domElement)) {
+        hostElement.removeChild(renderer.domElement);
       }
     };
   }, []);
 
-  // 暴露对外的生命周期，用于后续解析传入的 Container 并在 Scene 中渲染
+  // 暴露对外的生命周期，用于挂载与解析传入的 Container 并在 Scene 中渲染
   useEffect(() => {
-    if (!sceneRef.current || !containers || containers.length === 0) return;
+    if (!containerGroupRef.current || !containers) return;
+
+    const group = containerGroupRef.current;
+    const currentMap = containerMeshesRef.current;
+    const nextIds = new Set(containers.map((c: any) => c.id));
     
-    // 该部分预留，当接收到包含容器的数据后，在此处理3D对象的挂载渲染
-    console.log('Received Zod Contract Data - Containers:', containers);
+    // 1. 找出需要卸载的旧节点
+    const toRemove: THREE.Mesh[] = [];
+    currentMap.forEach((mesh: THREE.Mesh, id: string) => {
+      if (!nextIds.has(id)) {
+        toRemove.push(mesh);
+        currentMap.delete(id);
+      }
+    });
 
-    // TODO: 实现根据 containers 生成 3D 对象并添加到 sceneRef.current 的逻辑
-    // 记得在每次重新传入时清空前一次生成的 mesh
+    if (toRemove.length > 0) {
+      // 巧用独立 Scene，复用全局的安全 disposeSceneGraph 防止显存泄漏
+      const tempScene = new THREE.Scene();
+      toRemove.forEach((mesh) => {
+        group.remove(mesh);
+        tempScene.add(mesh);
+      });
+      disposeSceneGraph(tempScene);
+    }
 
+    // 2. 挂载或更新新节点
+    let hasChanges = toRemove.length > 0;
+    
+    // 暂时的简单排列：沿 X 轴间距排列
+    let currentX = 0;
+    
+    containers.forEach((c: any) => {
+      let mesh = currentMap.get(c.id);
+      if (!mesh) {
+        // 创建立方体 (根据常见认知：x为长 length，y为高 height，z为宽 width)
+        const geometry = new THREE.BoxGeometry(c.length, c.height, c.width);
+        const material = new THREE.MeshStandardMaterial({
+          color: 0x3399ff,
+          transparent: true,
+          opacity: 0.25,
+          side: THREE.DoubleSide,
+        });
+        mesh = new THREE.Mesh(geometry, material);
+
+        const edgesGeom = new THREE.EdgesGeometry(geometry);
+        const lineMat = new THREE.LineBasicMaterial({ color: 0x2266cc });
+        const line = new THREE.LineSegments(edgesGeom, lineMat);
+        mesh.add(line);
+
+        group.add(mesh);
+        currentMap.set(c.id, mesh);
+        hasChanges = true;
+      }
+      
+      // 更新位置，相邻排开，增加1000mm间距
+      mesh.position.set(currentX + c.length / 2, c.height / 2, 0);
+      currentX += c.length + 1000;
+    });
+
+    if (hasChanges) {
+      requestRenderRef.current();
+    }
   }, [containers]);
 
   return (

@@ -29,6 +29,7 @@ import { type EngineConfig, packIntoContainer } from "./placement-engine";
 import { sortCargoByVolumeAndWeight } from "./sorting";
 import { computeContainerStats, computeGlobalStats } from "./statistics";
 import {
+  checkBottomSupportStability,
   checkGravityStability,
   checkPayloadCompliance,
   computeCenterOfGravity,
@@ -121,6 +122,14 @@ export function solve(request: SolveRequest): SolveResult {
         instanceIndex: placedItem.instanceIndex,
       });
     }
+
+    const bottomSupportWarnings = checkBottomSupportStability(
+      containerPlacements,
+      containerAabbs,
+      container,
+      request.constraints.gravityCheck,
+    );
+    allWarnings.push(...bottomSupportWarnings);
 
     // 重量合规校验
     const payloadWarnings = checkPayloadCompliance(
@@ -243,4 +252,3 @@ export function safeSolve(rawInput: unknown):
 
   return { ok: true, result: outputParseResult.data };
 }
-

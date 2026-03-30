@@ -19,7 +19,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@sunmao/contracts": "workspace:*"
+    "@sunmao/contracts": "file:../contracts"
   },
   "devDependencies": {
     "typescript": "^5.7.0",

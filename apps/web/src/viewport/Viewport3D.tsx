@@ -113,9 +113,9 @@ export const Viewport3D: React.FC = () => {
       55,
       hostElement.clientWidth / hostElement.clientHeight,
       10,      // 近裁剪面
-      50000    // 远裁剪面: 可视范围达到 50m
+      100000    // 远裁剪面: 可视范围达到 100m
     );
-    camera.position.set(3000, 2000, 5000);
+    camera.position.set(8000, 5000, 10000);
 
     // 3. 初始化渲染器
     const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -137,13 +137,10 @@ export const Viewport3D: React.FC = () => {
     scene.add(rimLight);
 
     // 5. 初始化网格地板和坐标轴
-    // 假设常见的长集装箱最长12米(12000mm)左右，因此参考网格铺设 20 米大小。
-    const gridSize = 20000;
-    const gridDivisions = 40; 
-    const grid = new THREE.GridHelper(gridSize, gridDivisions, '#cb8f33', '#d8c5ae');
+    const grid = new THREE.GridHelper(10000, 100, '#cb8f33', '#d8c5ae');
     scene.add(grid);
 
-    const axesHelper = new THREE.AxesHelper(2500); 
+    const axesHelper = new THREE.AxesHelper(5000); 
     scene.add(axesHelper);
 
     const containerGroup = new THREE.Group();
@@ -332,12 +329,9 @@ export const Viewport3D: React.FC = () => {
           const cargo = cargoList[placement.cargoIndex];
           if (!cargo) return;
 
-          // box dimensions
           const [l, w, h] = [cargo.dimensions.length, cargo.dimensions.width, cargo.dimensions.height];
           
           const cargoGeo = new THREE.BoxGeometry(l, h, w);
-          // 将 BoxGeometry 中心对齐到AABB的最小角: 即 +length/2, +height/2, +width/2
-          cargoGeo.translate(l / 2, h / 2, w / 2);
 
           const cargoMat = new THREE.MeshStandardMaterial({
             color: cargo.color,
@@ -373,13 +367,13 @@ export const Viewport3D: React.FC = () => {
             THREE.MathUtils.degToRad(rz)
           );
           
-          // 应用位置: AABB 最小角坐标
+          // 应用位置
+          // 注意 Three.js 的 position 是中心点，而我们的算法算出的是最小角，渲染时需加上长宽高一半的偏移量！
           const [px, py, pz] = placement.position;
-          // Note: our local space maps Y to height. The position [x,y,z] from solver might be [l,w,h] or [x,y,z] where Z is height in real world?
-          // If the solver assumes Z is UP, we might need to swap Y and Z here.
-          // In standard solver config: x=length, y=width, z=height? Or X=length, Y=height, Z=width?
-          // Let's assume the solver uses (X=length, Y=height, Z=width) for simplicity, or we check the order.
-          cargoMesh.position.set(px, py, pz);
+          
+          // 如果这里因旋转了 90 度宽高颠倒，这里的偏移可能需要按具体旋转进行交换，
+          // 但根据标准简单推导，长宽高的初始偏置就是加上其 1/2
+          cargoMesh.position.set(px + l / 2, py + h / 2, pz + w / 2);
 
           containerRoot!.add(cargoMesh);
         });
@@ -403,6 +397,7 @@ export const Viewport3D: React.FC = () => {
     <div 
       ref={containerRef} 
       className="viewport-3d-container"
+      style={{ flex: 1, width: '100%', height: '100%', overflow: 'hidden' }}
     />
   );
 };

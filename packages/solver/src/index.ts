@@ -9,11 +9,15 @@
  *   - `safeSolve` — 带双重 Zod 验证的安全入口（推荐 API 层使用）
  *
  * 算法模块（供测试和复用）：
- *   - geometry        — AABB、碰撞检测、旋转变体
- *   - sorting         — 货物排序策略
- *   - placement-engine — Guillotine 放置算法
- *   - weight-checker  — 重量/重心校验
- *   - statistics      — 装载统计计算
+ *   - geometry              — AABB、碰撞检测、旋转变体
+ *   - sorting               — 货物排序策略
+ *   - placement-engine      — 主放置循环（策略注入点）
+ *   - weight-checker        — 重量/重心校验
+ *   - statistics            — 装载统计计算
+ *   - strategy              — PlacementStrategy 可插拔接口
+ *   - guillotine-strategy   — Guillotine 切割默认策略
+ *   - spiral-strategy       — 螺旋搜索策略
+ *   - voxel-collision       — 体素化碰撞精炼模块
  */
 
 export { solve, safeSolve } from "./solve";
@@ -56,3 +60,30 @@ export {
   computeContainerStats,
   computeGlobalStats,
 } from "./statistics";
+
+// ── 策略模式（Strategy Pattern）可插拔放置算法 ────────────────────────────
+export type {
+  PlacementStrategy,
+  PlacementDecision,
+  ItemDimensions,
+  ContainerDimensions,
+} from "./strategy";
+export { registerStrategy, getStrategy, listStrategies } from "./strategy";
+
+export { GuillotinePlacementStrategy } from "./guillotine-strategy";
+
+export type { SpiralStrategyConfig } from "./spiral-strategy";
+export { SpiralPlacementStrategy } from "./spiral-strategy";
+
+export type { VoxelBody } from "./voxel-collision";
+export {
+  buildVoxelBody,
+  buildBoxVoxelBody,
+  buildLShapeVoxelBody,
+  buildUShapeVoxelBody,
+  voxelIntersects,
+  voxelIntersectsFast,
+  computeVoxelBodBoundingAabb,
+  computeVoxelBodyVolume,
+  translateVoxelBody,
+} from "./voxel-collision";

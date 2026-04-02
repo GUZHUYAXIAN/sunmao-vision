@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { CameraControls } from './CameraControls';
+import { useDragInteraction } from './useDragInteraction';
 import { useProjectStore } from '../stores/useProjectStore';
 
 type MaterialWithUniforms = THREE.Material & {
@@ -89,55 +90,6 @@ const disposeSceneGraph = (scene: THREE.Scene) => {
   scene.clear();
 };
 
-// ─── 缺陷 3：溢出货物暂存区排列算法 ─────────────────────────────────────────
-//
-// 规划思路：沿 Z 轴整齐排列一列，每件货物之间留 50mm 安全间隙。
-// 位置：X = 集装箱群组的总宽度右侧 1000mm 处，Y = 0（落地），Z 递增。
-//
-interface StagingLayoutResult {
-  positions: Array<{ x: number; y: number; z: number; cargo: { length: number; width: number; height: number; color: string; displayName: string }; cargoIndex: number; instanceIndex: number }>;
-}
-
-function computeStagingLayout(
-  unplacedItems: Array<{ cargoIndex: number; reason: string }>,
-  cargoList: Array<{ dimensions: { length: number; width: number; height: number }; color: string; displayName: string }>,
-  stagingAreaStartX: number
-): StagingLayoutResult {
-  const INTER_ITEM_GAP = 50; // mm，货物之间的间隙
-  let currentZ = 0;
-  const positions: StagingLayoutResult['positions'] = [];
-
-  // 为了配合 unplacedItems 只记录 cargoIndex，我们分配 instanceIndex 从 0 开始
-  const instanceCountByCargoIndex = new Map<number, number>();
-
-  unplacedItems.forEach(({ cargoIndex }) => {
-    const cargo = cargoList[cargoIndex];
-    if (!cargo) return;
-
-    const allocatedInstance = instanceCountByCargoIndex.get(cargoIndex) ?? 0;
-    instanceCountByCargoIndex.set(cargoIndex, allocatedInstance + 1);
-
-    positions.push({
-      x: stagingAreaStartX,
-      y: 0,
-      z: currentZ,
-      cargo: {
-        length: cargo.dimensions.length,
-        width: cargo.dimensions.width,
-        height: cargo.dimensions.height,
-        color: cargo.color,
-        displayName: cargo.displayName,
-      },
-      cargoIndex,
-      instanceIndex: allocatedInstance,
-    });
-
-    // 每件货物占据其 width（Z 轴方向），再加间隙
-    currentZ += cargo.dimensions.width + INTER_ITEM_GAP;
-  });
-
-  return { positions };
-}
 
 export const Viewport3D: React.FC = () => {
   const { project, solveResult, selectedIds } = useProjectStore();
@@ -148,6 +100,31 @@ export const Viewport3D: React.FC = () => {
   const requestRenderRef = useRef<() => void>(() => undefined);
   const containerGroupRef = useRef<THREE.Group | null>(null);
   const containerMeshesRef = useRef<Map<string, THREE.Mesh>>(new Map());
+
+  // ── 拖拽交互所需的 Three.js 对象 refs（在 useEffect 内赋值）──
+  const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
+  const rendererDomRef = useRef<HTMLElement | null>(null);
+
+  const { onDragPointerDown, onDragPointerMove, onDragPointerUp, isActiveDragging } =
+    useDragInteraction(
+      cameraRef,
+      containerGroupRef,
+      rendererDomRef,
+      () => requestRenderRef.current(),
+    );
+
+  // 使用 ref 包住拖拽回调，使下方 useEffect 可安全引用（避免依赖数组问题）
+  const onDragPointerDownRef = useRef(onDragPointerDown);
+  const onDragPointerMoveRef = useRef(onDragPointerMove);
+  const onDragPointerUpRef = useRef(onDragPointerUp);
+  const isActiveDraggingRef = useRef(isActiveDragging);
+  useEffect(() => {
+    onDragPointerDownRef.current = onDragPointerDown;
+    onDragPointerMoveRef.current = onDragPointerMove;
+    onDragPointerUpRef.current = onDragPointerUp;
+    isActiveDraggingRef.current = isActiveDragging;
+  });
+
 
   useEffect(() => {
     const hostElement = containerRef.current;
@@ -205,6 +182,10 @@ export const Viewport3D: React.FC = () => {
     // 6. 初始化相机控制类 (包含各类交互操作)
     const controls = new CameraControls(camera, renderer.domElement, scene);
 
+    // 暴露 camera / renderer.domElement 给拖拽 Hook
+    cameraRef.current = camera;
+    rendererDomRef.current = renderer.domElement;
+
     // 7. 按需渲染：只在交互、阻尼衰减或尺寸变化时申请一帧
     let animationFrameId: number | null = null;
     let isDisposed = false;
@@ -246,22 +227,31 @@ export const Viewport3D: React.FC = () => {
     };
     window.addEventListener('resize', handleResize);
 
-    const raycaster = new THREE.Raycaster();
-    const mouse = new THREE.Vector2();
+    const selectionRaycaster = new THREE.Raycaster();
+    const selectionMouse = new THREE.Vector2();
 
+    /**
+     * 统一 pointerdown 处理器：
+     *   1. 先交给拖拽 Hook 尝试命中货物（若命中则开始拖拽会话）
+     *   2. 无论是否拖拽，同步执行选中逻辑（点击即选中）
+     *   3. 拖拽松手后 Hook 负责归位，选中状态在这里已完成，无需重复处理
+     */
     const onPointerDown = (event: PointerEvent) => {
       if (event.button !== 0 || !containerGroupRef.current || !containerRef.current) return;
 
+      // 交给拖拽 Hook （若击中货物，Hook 内部会开始拖拽会话）
+      const hitCargo = onDragPointerDownRef.current(event);
+
+      // 执行选中逻辑
       const rect = containerRef.current.getBoundingClientRect();
-      const x = event.clientX - rect.left;
-      const y = event.clientY - rect.top;
+      selectionMouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+      selectionMouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
 
-      mouse.x = (x / rect.width) * 2 - 1;
-      mouse.y = -(y / rect.height) * 2 + 1;
-
-      raycaster.setFromCamera(mouse, camera);
-
-      const intersects = raycaster.intersectObjects(containerGroupRef.current.children, true);
+      selectionRaycaster.setFromCamera(selectionMouse, camera);
+      const intersects = selectionRaycaster.intersectObjects(
+        containerGroupRef.current.children,
+        true,
+      );
 
       let clickedCargoId: string | null = null;
       let clickedContainerId: string | null = null;
@@ -269,7 +259,7 @@ export const Viewport3D: React.FC = () => {
       for (const intersect of intersects) {
         let obj: THREE.Object3D | null = intersect.object;
         while (obj) {
-          if (obj.userData?.isCargo) {
+          if (obj.userData?.isCargo && !obj.userData?.isStaging) {
             clickedCargoId = obj.userData.cargoId as string;
             break;
           }
@@ -287,21 +277,30 @@ export const Viewport3D: React.FC = () => {
       if (clickedCargoId) {
         setSelection(new Set([clickedCargoId]));
       } else if (clickedContainerId) {
-        // 将集装箱 ID 映射为 container_ 前缀格式，与 TreePanel 保持一致
         setSelection(new Set([`container_${clickedContainerId}`]));
-      } else {
+      } else if (!hitCargo) {
+        // 仅在未击中货物时清除选中，防止拖拽开始时误清空
         setSelection(new Set());
       }
     };
 
+    // ── 拖拽交互事件代理（使用 ref 包的回调，避免闭包问题）──
+    const handleDragMove = (event: PointerEvent) => onDragPointerMoveRef.current(event);
+    const handleDragUp = (event: PointerEvent) => onDragPointerUpRef.current(event);
+
     renderer.domElement.addEventListener('pointerdown', onPointerDown);
+    renderer.domElement.addEventListener('pointermove', handleDragMove);
+    // pointerup 注册在 window，确保鼠标移出 canvas 时也能收到松手事件
+    window.addEventListener('pointerup', handleDragUp);
 
     // 组件卸载清理
     return () => {
       isDisposed = true;
       requestRenderRef.current = () => undefined;
       window.removeEventListener('resize', handleResize);
+      window.removeEventListener('pointerup', handleDragUp);
       renderer.domElement.removeEventListener('pointerdown', onPointerDown);
+      renderer.domElement.removeEventListener('pointermove', handleDragMove);
       controls.orbControls.removeEventListener('change', requestRender);
       if (animationFrameId !== null) {
         cancelAnimationFrame(animationFrameId);
@@ -314,6 +313,8 @@ export const Viewport3D: React.FC = () => {
       sceneRef.current = null;
       containerGroupRef.current = null;
       containerMeshesRef.current.clear();
+      cameraRef.current = null;
+      rendererDomRef.current = null;
       if (hostElement.contains(renderer.domElement)) {
         hostElement.removeChild(renderer.domElement);
       }
@@ -515,45 +516,37 @@ export const Viewport3D: React.FC = () => {
     totalContainerGroupWidth = currentX;
 
     if (solveResult?.unplacedItems && solveResult.unplacedItems.length > 0) {
-      const STAGING_OFFSET_X = 1000; // 集装箱右侧 1000mm 处
-      const stagingStartX = totalContainerGroupWidth + STAGING_OFFSET_X;
-
       const stagingGroup = new THREE.Group();
       stagingGroup.name = 'staging-group';
 
-      const { positions } = computeStagingLayout(
-        solveResult.unplacedItems,
-        cargoList,
-        0 // 局部坐标，下面会整体偏移 stagingStartX
-      );
+      // 修复要求 2：固定起始点为集装箱右侧外 startX = container.width + 1000
+      // 我们用 totalContainerGroupWidth 作为参考，以确保超出当前集装箱的范围
+      const containerWidth = containers[0]?.width || 2000;
+      const startX = Math.max(totalContainerGroupWidth, containerWidth) + 1000;
 
-      // 暂存区背景提示板（半透明红色平面）
-      const stagingAreaDepth = positions.length > 0
-        ? positions[positions.length - 1].z + (cargoList[positions[positions.length - 1].cargoIndex]?.dimensions.width ?? 500) + 100
-        : 1000;
-
-      const floorGeo = new THREE.PlaneGeometry(2000, stagingAreaDepth);
-      const floorMat = new THREE.MeshBasicMaterial({
-        color: 0xff4444,
-        transparent: true,
-        opacity: 0.08,
-        side: THREE.DoubleSide,
-      });
+      // 暂存区底板或者标牌(可以加个简单的平面提示)
+      const floorGeo = new THREE.PlaneGeometry(2000, 20000);
+      const floorMat = new THREE.MeshBasicMaterial({ color: 0xff4444, transparent: true, opacity: 0.08, side: THREE.DoubleSide });
       const floorMesh = new THREE.Mesh(floorGeo, floorMat);
       floorMesh.rotation.x = -Math.PI / 2;
-      floorMesh.position.set(1000, 1, stagingAreaDepth / 2);
+      floorMesh.position.set(startX, 1, 10000 - 1000);
       stagingGroup.add(floorMesh);
 
-      // 暂存区文字标牌（用边框线模拟）
-      const labelGeo = new THREE.BoxGeometry(800, 80, 1);
-      const labelMat = new THREE.MeshBasicMaterial({ color: 0xff2222, transparent: true, opacity: 0.7 });
-      const labelMesh = new THREE.Mesh(labelGeo, labelMat);
-      labelMesh.position.set(1000, 100, -200);
-      stagingGroup.add(labelMesh);
+      // 为了选中逻辑的需要，维护每个货物模板被分配的 instanceIndex
+      const instanceCountByCargoIndex = new Map<number, number>();
 
-      // 渲染每一件溢出货物
-      positions.forEach(({ x, y, z, cargo, cargoIndex, instanceIndex }) => {
-        const { length, width, height, color } = cargo;
+      solveResult.unplacedItems.forEach((item, index) => {
+        // 修复要求 1：从 useProjectStore 的 cargoList(即templates) 提取出该货物真实的信息
+        const cargo = cargoList[item.cargoIndex];
+        if (!cargo) return;
+
+        const allocatedInstance = instanceCountByCargoIndex.get(item.cargoIndex) ?? 0;
+        instanceCountByCargoIndex.set(item.cargoIndex, allocatedInstance + 1);
+
+        const { length, width, height } = cargo.dimensions;
+        const color = cargo.color;
+
+        // 真实尺寸 BoxGeometry
         const cargoGeo = new THREE.BoxGeometry(length, height, width);
         const cargoMat = new THREE.MeshStandardMaterial({
           color,
@@ -562,25 +555,39 @@ export const Viewport3D: React.FC = () => {
           roughness: 0.7,
           metalness: 0.05,
         });
-        const cargoMesh = new THREE.Mesh(cargoGeo, cargoMat);
 
-        // 货物底面落地：y 中心偏移 = height / 2
-        cargoMesh.position.set(x + length / 2, y + height / 2, z + width / 2);
+        const cargoMesh = new THREE.Mesh(cargoGeo, cargoMat);
+        
+        // 修复要求 2：利用 index 分配错开的 Z 轴偏移量
+        const offsetZ = index * 1000;
+
+        // X = startX
+        // Y = 真实高度 / 2 (地板二维平铺)
+        // Z = offsetZ
+        cargoMesh.position.set(startX, height / 2, offsetZ);
+
         cargoMesh.userData = {
           isCargo: true,
-          cargoId: `staging_${cargoIndex}_${instanceIndex}`,
+          cargoId: `staging_${item.cargoIndex}_${allocatedInstance}`,
           isStaging: true,
         };
 
-        // 红色边线标注"未入柜"状态
         const edges = new THREE.EdgesGeometry(cargoGeo);
         const edgeMat = new THREE.LineBasicMaterial({ color: 0xff3333 });
-        cargoMesh.add(new THREE.LineSegments(edges, edgeMat));
+        const cargoLine = new THREE.LineSegments(edges, edgeMat);
+        cargoMesh.add(cargoLine);
+
+        // 如果被选中则给予高亮效果
+        if (selectedIds.has(cargoMesh.userData.cargoId)) {
+          cargoMat.emissive.setHex(0x555555);
+          cargoMat.opacity = 1.0;
+          cargoMat.transparent = false;
+          edgeMat.color.setHex(0xffffff);
+        }
 
         stagingGroup.add(cargoMesh);
       });
 
-      stagingGroup.position.set(stagingStartX, 0, 0);
       group.add(stagingGroup);
       hasChanges = true;
     }

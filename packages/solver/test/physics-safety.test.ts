@@ -231,3 +231,155 @@ describe("堆叠层数限制 (P1 fix — maxStackLayers not vacuous)", () => {
     expect(result.placed[1]?.placement.position[1]).toBe(100);
   });
 });
+
+// ─────────────────────────────────────────────
+// M4 P0-Bug1: 贪心早退（小货物被槽门槛过滤）
+// ─────────────────────────────────────────────
+
+describe("贪心早退修复 (M4-P0-Bug1 — MINIMUM_SLOT_DIMENSION_MM 从 80 降为 1)", () => {
+  test("缩小集装箱后，尺寸适配的小货物必须被成功放置（不因槽被过滤而返回全空）", () => {
+    const container = createContainer({ length: 100, width: 100, height: 100 });
+    const engineConfig: EngineConfig = {
+      containerLength: container.length,
+      containerWidth: container.width,
+      containerHeight: container.height,
+      allowRotation: false,
+      maxStackLayers: undefined,
+    };
+
+    const smallBoxA = createCargoTemplate(
+      "60000000-0000-4000-8000-000000000001",
+      { length: 50, width: 100, height: 50 },
+    );
+    const smallBoxB = createCargoTemplate(
+      "60000000-0000-4000-8000-000000000002",
+      { length: 50, width: 100, height: 50 },
+    );
+
+    const result = packIntoContainer(
+      [
+        { template: smallBoxA, quantity: 1, cargoIndex: 0 },
+        { template: smallBoxB, quantity: 1, cargoIndex: 1 },
+      ],
+      container,
+      engineConfig,
+    );
+
+    expect(result.placed).toHaveLength(2);
+    expect(result.unplaced).toHaveLength(0);
+  });
+
+  test("4 件 50mm 小货物铺满底层后，顶层 100mm 货物也能正确放置", () => {
+    const container = createContainer({ length: 100, width: 100, height: 100 });
+    const engineConfig: EngineConfig = {
+      containerLength: container.length,
+      containerWidth: container.width,
+      containerHeight: container.height,
+      allowRotation: false,
+      maxStackLayers: undefined,
+    };
+
+    const floorBox = createCargoTemplate(
+      "70000000-0000-4000-8000-000000000001",
+      { length: 50, width: 50, height: 50 },
+    );
+    const topBox = createCargoTemplate(
+      "70000000-0000-4000-8000-000000000002",
+      { length: 100, width: 100, height: 50 },
+    );
+
+    const result = packIntoContainer(
+      [
+        { template: floorBox, quantity: 4, cargoIndex: 0 },
+        { template: topBox, quantity: 1, cargoIndex: 1 },
+      ],
+      container,
+      engineConfig,
+    );
+
+    expect(result.placed).toHaveLength(5);
+    expect(result.unplaced).toHaveLength(0);
+    const topItem = result.placed.find((item) => item.cargoIndex === 1);
+    expect(topItem?.placement.position[1]).toBe(50);
+  });
+});
+
+// ─────────────────────────────────────────────
+// M4 P0-Bug2: Y 轴下方切割遗漏导致穿模
+// ─────────────────────────────────────────────
+
+describe("穿模修复 (M4-P0-Bug2 — Y 轴下方残余槽不被吞掉)", () => {
+  test("放置高层货物后，其 Y 轴上方的合法空间不应消失，两件货物不应穿模", () => {
+    const container = createContainer({ length: 100, width: 100, height: 200 });
+    const engineConfig: EngineConfig = {
+      containerLength: container.length,
+      containerWidth: container.width,
+      containerHeight: container.height,
+      allowRotation: false,
+      maxStackLayers: undefined,
+    };
+
+    const baseBlock = createCargoTemplate(
+      "80000000-0000-4000-8000-000000000001",
+      { length: 100, width: 100, height: 100 },
+    );
+    const topSmall = createCargoTemplate(
+      "80000000-0000-4000-8000-000000000002",
+      { length: 50, width: 50, height: 50 },
+    );
+
+    const result = packIntoContainer(
+      [
+        { template: baseBlock, quantity: 1, cargoIndex: 0 },
+        { template: topSmall, quantity: 1, cargoIndex: 1 },
+      ],
+      container,
+      engineConfig,
+    );
+
+    expect(result.placed).toHaveLength(2);
+    expect(result.unplaced).toHaveLength(0);
+
+    const aabb0 = result.placed[0]!.occupiedAabb;
+    const aabb1 = result.placed[1]!.occupiedAabb;
+    expect(aabbIntersects(aabb0, aabb1)).toBe(false);
+    expect(result.placed[1]!.placement.position[1]).toBe(100);
+  });
+
+  test("三个同尺寸货物垂直叠放时，任意两件不应相交且 Y 坐标必须为 0/100/200", () => {
+    const container = createContainer({ length: 100, width: 100, height: 300 });
+    const engineConfig: EngineConfig = {
+      containerLength: container.length,
+      containerWidth: container.width,
+      containerHeight: container.height,
+      allowRotation: false,
+      maxStackLayers: undefined,
+    };
+
+    const slab = createCargoTemplate(
+      "90000000-0000-4000-8000-000000000001",
+      { length: 100, width: 100, height: 100 },
+    );
+
+    const result = packIntoContainer(
+      [{ template: slab, quantity: 3, cargoIndex: 0 }],
+      container,
+      engineConfig,
+    );
+
+    expect(result.placed).toHaveLength(3);
+    expect(result.unplaced).toHaveLength(0);
+
+    const aabbs = result.placed.map((item) => item.occupiedAabb);
+    for (let firstIndex = 0; firstIndex < aabbs.length; firstIndex++) {
+      for (let secondIndex = firstIndex + 1; secondIndex < aabbs.length; secondIndex++) {
+        expect(aabbIntersects(aabbs[firstIndex]!, aabbs[secondIndex]!)).toBe(false);
+      }
+    }
+
+    const yPositions = result.placed
+      .map((item) => item.placement.position[1])
+      .sort((yA, yB) => yA - yB);
+    expect(yPositions).toEqual([0, 100, 200]);
+  });
+});

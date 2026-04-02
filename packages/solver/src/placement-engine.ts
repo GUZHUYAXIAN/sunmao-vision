@@ -16,37 +16,14 @@
  */
 
 import type { CargoTemplate, Container, Placement } from "@sunmao/contracts";
-import {
-  type Aabb,
-  type FreeSlot,
-  GEOMETRY_EPSILON_MM,
-  type RotationVariant,
-  deduplicateSlots,
-  filterMinimalSlots,
-  getRotationVariants,
-  hasAnyIntersection,
-  isWithinContainer,
-  makeAabb,
-  slotsIntersect,
-} from "./geometry";
-import { hasSufficientBottomSupport } from "./weight-checker";
+import { type Aabb, type FreeSlot, GEOMETRY_EPSILON_MM, makeAabb } from "./geometry";
+import type { PlacementStrategy } from "./strategy";
+import { GuillotinePlacementStrategy } from "./guillotine-strategy";
 
 // ─────────────────────────────────────────────
 // 内部类型
 // ─────────────────────────────────────────────
 
-/** 放置候选方案：一个货物实例放在某个自由槽的某种旋转下 */
-type PlacementCandidate = {
-  /** 落点 X 坐标（mm） */
-  readonly x: number;
-  /** 落点 Y 坐标（mm） */
-  readonly y: number;
-  /** 落点 Z 坐标（mm） */
-  readonly z: number;
-  readonly variant: RotationVariant;
-  /** 评分越小越优先（填底优先） */
-  readonly score: number;
-};
 
 /** 引擎配置：集装箱尺寸 + 求解约束（从外部传入，引擎本身无状态） */
 export type EngineConfig = {
@@ -90,237 +67,9 @@ export type ContainerPackResult = {
 };
 
 // ─────────────────────────────────────────────
-// 评分函数
-// ─────────────────────────────────────────────
-
-/**
- * 计算放置候选的优先级评分（越低越优先）。
- *
- * 评分编码策略（借鉴自旧版 SmartContainer planner-core）：
- *   score = y × 1_000_000 + z × 1_000 + x
- *
- * 这保证了：
- *   - 底层（Y 小）优先：使重心更低，稳定性更好
- *   - 同层内靠前（Z 小）优先：从入口侧开始填
- *   - 同行内靠左（X 小）优先：紧凑排列
- */
-function computePlacementScore(x: number, y: number, z: number): number {
-  return y * 1_000_000 + z * 1_000 + x;
-}
-
-// ─────────────────────────────────────────────
-// 候选搜索
-// ─────────────────────────────────────────────
-
-/**
- * 在自由槽列表中寻找最优放置候选。
- *
- * 对每个自由槽和每个旋转变体，检查货物是否能放入：
- *   1. 货物尺寸不超出槽的容量
- *   2. 放置后的 AABB 不超出集装箱边界（边界理论上由槽保证，但做防御性检查）
- *   3. 放置后与已占用 AABB 无交叉
- *
- * @param variants      - 该货物所有合法旋转变体
- * @param freeSlots     - 当前可用自由槽列表
- * @param occupiedAabbs - 已放置货物的 AABB 列表
- * @param config        - 引擎配置
- */
-function findBestCandidate(
-  variants: RotationVariant[],
-  freeSlots: readonly FreeSlot[],
-  occupiedAabbs: readonly Aabb[],
-  config: EngineConfig,
-): PlacementCandidate | null {
-  let bestCandidate: PlacementCandidate | null = null;
-
-  for (const slot of freeSlots) {
-    for (const variant of variants) {
-      if (
-        variant.length > slot.length + GEOMETRY_EPSILON_MM ||
-        variant.height > slot.height + GEOMETRY_EPSILON_MM ||
-        variant.width > slot.width + GEOMETRY_EPSILON_MM
-      ) {
-        continue;
-      }
-
-      const x = slot.x;
-      const y = slot.y;
-      const z = slot.z;
-
-      const candidateAabb = makeAabb(x, y, z, variant.length, variant.height, variant.width);
-
-      if (!isWithinContainer(candidateAabb, config.containerLength, config.containerHeight, config.containerWidth)) {
-        continue;
-      }
-
-      if (hasAnyIntersection(candidateAabb, occupiedAabbs)) {
-        continue;
-      }
-
-      if (!hasSufficientBottomSupport(candidateAabb, occupiedAabbs)) {
-        continue;
-      }
-
-      const score = computePlacementScore(x, y, z);
-      if (bestCandidate === null || score < bestCandidate.score) {
-        bestCandidate = { x, y, z, variant, score };
-      }
-    }
-  }
-
-  return bestCandidate;
-}
-
-// ─────────────────────────────────────────────
-// Guillotine 空间切割
-// ─────────────────────────────────────────────
-
-/**
- * 将自由槽的坐标和尺寸严格 clamp 到集装箱物理边界内。
- *
- * 防御性操作：Guillotine 切割后因浮点累积偏差，子槽的
- * 起始坐标或结束坐标可能比集装箱边界多出 1e-13 级别误差。
- * 不 clamp 则这些槽会在 isWithinContainer 校验时被丢弃，
- * 导致可用空间被无故浪费；clamp 后保证槽始终合法。
- *
- * @param slot            - 待 clamp 的槽
- * @param containerLength - 集装箱长度上限（X 轴，mm）
- * @param containerHeight - 集装箱高度上限（Y 轴，mm）
- * @param containerWidth  - 集装箱宽度上限（Z 轴，mm）
- * @returns clamp 后的槽，若各轴有效尺寸 ≤ 0 则返回 null
- */
-function clampSlotToContainer(
-  slot: FreeSlot,
-  containerLength: number,
-  containerHeight: number,
-  containerWidth: number,
-): FreeSlot | null {
-  const clampedX = Math.max(0, slot.x);
-  const clampedY = Math.max(0, slot.y);
-  const clampedZ = Math.max(0, slot.z);
-
-  const clampedEndX = Math.min(slot.x + slot.length, containerLength);
-  const clampedEndY = Math.min(slot.y + slot.height, containerHeight);
-  const clampedEndZ = Math.min(slot.z + slot.width, containerWidth);
-
-  const clampedLength = clampedEndX - clampedX;
-  const clampedHeight = clampedEndY - clampedY;
-  const clampedWidth = clampedEndZ - clampedZ;
-
-  if (clampedLength <= 0 || clampedHeight <= 0 || clampedWidth <= 0) {
-    return null;
-  }
-
-  return {
-    x: clampedX,
-    y: clampedY,
-    z: clampedZ,
-    length: clampedLength,
-    height: clampedHeight,
-    width: clampedWidth,
-  };
-}
-
-/**
- * 放置一个货物后，用 Guillotine 水平切割更新自由空间列表。
- *
- * 对于每个与占用区域相交的槽，从 6 个方向（3轴 × 2方向）切割出
- * 剩余的自由子槽，然后过滤太小的槽并去重。
- *
- * 这是旧版 SmartContainer `buildLoadPlan` 中自由空间更新逻辑的
- * 纯函数化实现，增加了 Y 轴上方的切割（旧版遗漏）。
- * 切割后每个子槽都经过容器边界 clamp，确保不会产生越界槽。
- *
- * @param currentSlots    - 当前自由槽列表
- * @param occupied        - 刚刚被占用的空间区域（以 FreeSlot 形式表示）
- * @param minimumSlotSize - 有效槽的最小尺寸（mm），过小的槽直接丢弃
- * @param containerLength - 集装箱长度（用于边界 clamp）
- * @param containerHeight - 集装箱高度（用于边界 clamp）
- * @param containerWidth  - 集装箱宽度（用于边界 clamp）
- */
-function guillotineCut(
-  currentSlots: FreeSlot[],
-  occupied: FreeSlot,
-  minimumSlotSize: number,
-  containerLength: number,
-  containerHeight: number,
-  containerWidth: number,
-): FreeSlot[] {
-  const rawCuts: FreeSlot[] = [];
-
-  for (const slot of currentSlots) {
-    if (!slotsIntersect(slot, occupied)) {
-      rawCuts.push(slot);
-      continue;
-    }
-
-    // X 轴左侧残余槽
-    if (occupied.x > slot.x + GEOMETRY_EPSILON_MM) {
-      rawCuts.push({ ...slot, length: occupied.x - slot.x });
-    }
-
-    // X 轴右侧残余槽
-    const occupiedRight = occupied.x + occupied.length;
-    const slotRight = slot.x + slot.length;
-    if (occupiedRight < slotRight - GEOMETRY_EPSILON_MM) {
-      rawCuts.push({
-        ...slot,
-        x: occupiedRight,
-        length: slotRight - occupiedRight,
-      });
-    }
-
-    // Y 轴上方残余槽（旧版 BoxStack 中存在，SmartContainer 中遗漏的方向）
-    const occupiedTop = occupied.y + occupied.height;
-    const slotTop = slot.y + slot.height;
-    if (occupiedTop < slotTop - GEOMETRY_EPSILON_MM) {
-      rawCuts.push({
-        ...slot,
-        y: occupiedTop,
-        height: slotTop - occupiedTop,
-      });
-    }
-
-    // Z 轴前侧残余槽
-    if (occupied.z > slot.z + GEOMETRY_EPSILON_MM) {
-      rawCuts.push({ ...slot, width: occupied.z - slot.z });
-    }
-
-    // Z 轴后侧残余槽
-    const occupiedBack = occupied.z + occupied.width;
-    const slotBack = slot.z + slot.width;
-    if (occupiedBack < slotBack - GEOMETRY_EPSILON_MM) {
-      rawCuts.push({
-        ...slot,
-        z: occupiedBack,
-        width: slotBack - occupiedBack,
-      });
-    }
-  }
-
-  // 对所有切割结果进行容器边界 clamp，消除浮点累积误差导致的越界槽
-  const clampedSlots: FreeSlot[] = [];
-  for (const rawSlot of rawCuts) {
-    const clamped = clampSlotToContainer(
-      rawSlot,
-      containerLength,
-      containerHeight,
-      containerWidth,
-    );
-    if (clamped !== null) {
-      clampedSlots.push(clamped);
-    }
-  }
-
-  return deduplicateSlots(filterMinimalSlots(clampedSlots, minimumSlotSize));
-}
-
-// ─────────────────────────────────────────────
 // 公开入口
 // ─────────────────────────────────────────────
 
-/** Guillotine 槽清理时使用的最小有效尺寸阈值（mm） */
-const MINIMUM_SLOT_DIMENSION_MM = 80;
 
 /**
  * 在单个集装箱内执行多货物的三维放置排布。
@@ -338,8 +87,22 @@ export function packIntoContainer(
   cargoList: ReadonlyArray<{ template: CargoTemplate; quantity: number; cargoIndex: number }>,
   container: Container,
   config: EngineConfig,
+  /**
+   * 可插拔放置策略。
+   * 不传时默认使用 GuillotinePlacementStrategy（延迟注入，避免循环依赖）。
+   */
+  strategy?: PlacementStrategy,
 ): ContainerPackResult {
   const { length: containerLength, height: containerHeight, width: containerWidth } = container;
+
+  // strategy 未传时使用 GuillotinePlacement 作为默认策略
+  const activeStrategy: PlacementStrategy = strategy ?? new GuillotinePlacementStrategy();
+
+  const containerDimensions = {
+    length: containerLength,
+    height: containerHeight,
+    width: containerWidth,
+  };
 
   let freeSlots: FreeSlot[] = [
     {
@@ -401,16 +164,23 @@ export function packIntoContainer(
 
       if (activeFreeSlots === null) continue;
 
-      const variants = getRotationVariants(
-        template.dimensions.length,
-        template.dimensions.height,
-        template.dimensions.width,
+      // ── 策略：寻找最佳放置位置 ────────────────────────────────────
+      const itemDimensions = {
+        length: template.dimensions.length,
+        height: template.dimensions.height,
+        width: template.dimensions.width,
+        weight: template.weight,
+      };
+
+      const decision = activeStrategy.findBestPlacement(
+        itemDimensions,
+        activeFreeSlots,
+        containerDimensions,
+        occupiedAabbs,
         config.allowRotation,
       );
 
-      const candidate = findBestCandidate(variants, activeFreeSlots, occupiedAabbs, config);
-
-      if (candidate === null) {
+      if (decision === null) {
         unplaced.push({
           cargoIndex,
           instanceIndex,
@@ -419,42 +189,38 @@ export function packIntoContainer(
         continue;
       }
 
-      const occupiedAabb = makeAabb(
-        candidate.x,
-        candidate.y,
-        candidate.z,
-        candidate.variant.length,
-        candidate.variant.height,
-        candidate.variant.width,
-      );
+      const [posX, posY, posZ] = decision.position;
+      const [, rotY] = decision.rotation;
+
+      // 根据旋转决策还原实际最终尺寸
+      const isRotated = rotY !== 0;
+      const finalLength = isRotated ? template.dimensions.width : template.dimensions.length;
+      const finalHeight = template.dimensions.height;
+      const finalWidth = isRotated ? template.dimensions.length : template.dimensions.width;
+
+      const occupiedAabb = makeAabb(posX, posY, posZ, finalLength, finalHeight, finalWidth);
 
       occupiedAabbs.push(occupiedAabb);
       currentTotalWeight += template.weight;
 
       const occupiedSlot: FreeSlot = {
-        x: candidate.x,
-        y: candidate.y,
-        z: candidate.z,
-        length: candidate.variant.length,
-        height: candidate.variant.height,
-        width: candidate.variant.width,
+        x: posX,
+        y: posY,
+        z: posZ,
+        length: finalLength,
+        height: finalHeight,
+        width: finalWidth,
       };
 
-      freeSlots = guillotineCut(
-        freeSlots,
-        occupiedSlot,
-        MINIMUM_SLOT_DIMENSION_MM,
-        containerLength,
-        containerHeight,
-        containerWidth,
-      );
+      // ── 策略：放置后更新自由空间 ─────────────────────────────────────
+      freeSlots = activeStrategy.afterPlacement(occupiedSlot, freeSlots, containerDimensions);
 
       const placement: Placement = {
         cargoIndex,
         instanceIndex,
         containerId: container.id,
-        position: [candidate.x, candidate.y, candidate.z],
-        rotation: [0, candidate.variant.rotationY, 0],
+        position: [posX, posY, posZ],
+        rotation: [0, rotY, 0],
       };
 
       placed.push({ cargoIndex, instanceIndex, placement, occupiedAabb });

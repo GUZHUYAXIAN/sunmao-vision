@@ -3,6 +3,7 @@ import { Viewport3D } from '../../viewport/Viewport3D';
 import { TreePanel } from '../panels/TreePanel';
 import { PropertiesPanel } from '../panels/PropertiesPanel';
 import { ActionBar } from '../widgets/ActionBar';
+import { WeightRuler } from '../widgets/WeightRuler';
 
 export const AppShell: React.FC = () => {
   return (
@@ -20,7 +21,7 @@ export const AppShell: React.FC = () => {
         <PropertiesPanel />
       </div>
       <div className="shell-statusbar">
-        <span className="statusbar-text">底部重量标尺占位</span>
+        <WeightRuler />
       </div>
     </div>
   );

@@ -176,6 +176,52 @@ function findBestCandidate(
 // ─────────────────────────────────────────────
 
 /**
+ * 将自由槽的坐标和尺寸严格 clamp 到集装箱物理边界内。
+ *
+ * 防御性操作：Guillotine 切割后因浮点累积偏差，子槽的
+ * 起始坐标或结束坐标可能比集装箱边界多出 1e-13 级别误差。
+ * 不 clamp 则这些槽会在 isWithinContainer 校验时被丢弃，
+ * 导致可用空间被无故浪费；clamp 后保证槽始终合法。
+ *
+ * @param slot            - 待 clamp 的槽
+ * @param containerLength - 集装箱长度上限（X 轴，mm）
+ * @param containerHeight - 集装箱高度上限（Y 轴，mm）
+ * @param containerWidth  - 集装箱宽度上限（Z 轴，mm）
+ * @returns clamp 后的槽，若各轴有效尺寸 ≤ 0 则返回 null
+ */
+function clampSlotToContainer(
+  slot: FreeSlot,
+  containerLength: number,
+  containerHeight: number,
+  containerWidth: number,
+): FreeSlot | null {
+  const clampedX = Math.max(0, slot.x);
+  const clampedY = Math.max(0, slot.y);
+  const clampedZ = Math.max(0, slot.z);
+
+  const clampedEndX = Math.min(slot.x + slot.length, containerLength);
+  const clampedEndY = Math.min(slot.y + slot.height, containerHeight);
+  const clampedEndZ = Math.min(slot.z + slot.width, containerWidth);
+
+  const clampedLength = clampedEndX - clampedX;
+  const clampedHeight = clampedEndY - clampedY;
+  const clampedWidth = clampedEndZ - clampedZ;
+
+  if (clampedLength <= 0 || clampedHeight <= 0 || clampedWidth <= 0) {
+    return null;
+  }
+
+  return {
+    x: clampedX,
+    y: clampedY,
+    z: clampedZ,
+    length: clampedLength,
+    height: clampedHeight,
+    width: clampedWidth,
+  };
+}
+
+/**
  * 放置一个货物后，用 Guillotine 水平切割更新自由空间列表。
  *
  * 对于每个与占用区域相交的槽，从 6 个方向（3轴 × 2方向）切割出
@@ -183,34 +229,41 @@ function findBestCandidate(
  *
  * 这是旧版 SmartContainer `buildLoadPlan` 中自由空间更新逻辑的
  * 纯函数化实现，增加了 Y 轴上方的切割（旧版遗漏）。
+ * 切割后每个子槽都经过容器边界 clamp，确保不会产生越界槽。
  *
- * @param currentSlots - 当前自由槽列表
- * @param occupied     - 刚刚被占用的空间区域（以 FreeSlot 形式表示）
+ * @param currentSlots    - 当前自由槽列表
+ * @param occupied        - 刚刚被占用的空间区域（以 FreeSlot 形式表示）
  * @param minimumSlotSize - 有效槽的最小尺寸（mm），过小的槽直接丢弃
+ * @param containerLength - 集装箱长度（用于边界 clamp）
+ * @param containerHeight - 集装箱高度（用于边界 clamp）
+ * @param containerWidth  - 集装箱宽度（用于边界 clamp）
  */
 function guillotineCut(
   currentSlots: FreeSlot[],
   occupied: FreeSlot,
   minimumSlotSize: number,
+  containerLength: number,
+  containerHeight: number,
+  containerWidth: number,
 ): FreeSlot[] {
-  const nextSlots: FreeSlot[] = [];
+  const rawCuts: FreeSlot[] = [];
 
   for (const slot of currentSlots) {
     if (!slotsIntersect(slot, occupied)) {
-      nextSlots.push(slot);
+      rawCuts.push(slot);
       continue;
     }
 
     // X 轴左侧残余槽
     if (occupied.x > slot.x + GEOMETRY_EPSILON_MM) {
-      nextSlots.push({ ...slot, length: occupied.x - slot.x });
+      rawCuts.push({ ...slot, length: occupied.x - slot.x });
     }
 
     // X 轴右侧残余槽
     const occupiedRight = occupied.x + occupied.length;
     const slotRight = slot.x + slot.length;
     if (occupiedRight < slotRight - GEOMETRY_EPSILON_MM) {
-      nextSlots.push({
+      rawCuts.push({
         ...slot,
         x: occupiedRight,
         length: slotRight - occupiedRight,
@@ -221,7 +274,7 @@ function guillotineCut(
     const occupiedTop = occupied.y + occupied.height;
     const slotTop = slot.y + slot.height;
     if (occupiedTop < slotTop - GEOMETRY_EPSILON_MM) {
-      nextSlots.push({
+      rawCuts.push({
         ...slot,
         y: occupiedTop,
         height: slotTop - occupiedTop,
@@ -230,14 +283,14 @@ function guillotineCut(
 
     // Z 轴前侧残余槽
     if (occupied.z > slot.z + GEOMETRY_EPSILON_MM) {
-      nextSlots.push({ ...slot, width: occupied.z - slot.z });
+      rawCuts.push({ ...slot, width: occupied.z - slot.z });
     }
 
     // Z 轴后侧残余槽
     const occupiedBack = occupied.z + occupied.width;
     const slotBack = slot.z + slot.width;
     if (occupiedBack < slotBack - GEOMETRY_EPSILON_MM) {
-      nextSlots.push({
+      rawCuts.push({
         ...slot,
         z: occupiedBack,
         width: slotBack - occupiedBack,
@@ -245,7 +298,21 @@ function guillotineCut(
     }
   }
 
-  return deduplicateSlots(filterMinimalSlots(nextSlots, minimumSlotSize));
+  // 对所有切割结果进行容器边界 clamp，消除浮点累积误差导致的越界槽
+  const clampedSlots: FreeSlot[] = [];
+  for (const rawSlot of rawCuts) {
+    const clamped = clampSlotToContainer(
+      rawSlot,
+      containerLength,
+      containerHeight,
+      containerWidth,
+    );
+    if (clamped !== null) {
+      clampedSlots.push(clamped);
+    }
+  }
+
+  return deduplicateSlots(filterMinimalSlots(clampedSlots, minimumSlotSize));
 }
 
 // ─────────────────────────────────────────────
@@ -373,7 +440,14 @@ export function packIntoContainer(
         width: candidate.variant.width,
       };
 
-      freeSlots = guillotineCut(freeSlots, occupiedSlot, MINIMUM_SLOT_DIMENSION_MM);
+      freeSlots = guillotineCut(
+        freeSlots,
+        occupiedSlot,
+        MINIMUM_SLOT_DIMENSION_MM,
+        containerLength,
+        containerHeight,
+        containerWidth,
+      );
 
       const placement: Placement = {
         cargoIndex,

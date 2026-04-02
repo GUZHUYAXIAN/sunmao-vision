@@ -1,0 +1,219 @@
+/* ──────────────────────────────────
+   WeightRuler — 底部重量温度计色阶
+   ────────────────────────────────── */
+
+.weight-ruler {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  height: 100%;
+  padding: 0 16px;
+  background-color: #1e1e2e;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  color: hsl(220, 10%, 82%);
+  font-size: 11px;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+/* 空状态 */
+.weight-ruler--empty {
+  justify-content: center;
+  opacity: 0.5;
+}
+
+/* 左侧摘要信息区 */
+.weight-ruler__summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.weight-ruler__icon {
+  font-size: 13px;
+}
+
+.weight-ruler__total strong {
+  color: hsl(220, 10%, 95%);
+  font-weight: 600;
+}
+
+.weight-ruler__divider {
+  opacity: 0.3;
+  margin: 0 2px;
+}
+
+.weight-ruler__light-label {
+  color: hsl(195, 80%, 65%);
+  font-weight: 600;
+}
+
+.weight-ruler__heavy-label {
+  color: hsl(0, 80%, 65%);
+  font-weight: 600;
+}
+
+/* ──── 主体温度计区 ──── */
+.weight-ruler__thermometer-wrapper {
+  position: relative;
+  flex: 1;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+/* 渐变色阶条（蓝→红，左轻右重） */
+.weight-ruler__bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 8px;
+  border-radius: 4px;
+  background: linear-gradient(
+    to right,
+    hsl(195, 80%, 65%),   /* 最轻 — 冷蓝 */
+    hsl(160, 75%, 60%),   /* 中间 — 绿青 */
+    hsl(60, 90%, 60%),    /* 中间 — 黄 */
+    hsl(30, 90%, 58%),    /* 中间 — 橙 */
+    hsl(0, 80%, 58%)      /* 最重 — 热红 */
+  );
+  box-shadow:
+    0 0 8px rgba(255, 100, 80, 0.25),
+    0 0 4px rgba(80, 200, 230, 0.2);
+}
+
+/* 刻度标签（最小值/最大值挂在色阶两端下方） */
+.weight-ruler__scale {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 3px;
+  display: flex;
+  justify-content: space-between;
+  font-size: 9px;
+  color: hsl(220, 10%, 55%);
+  pointer-events: none;
+}
+
+/* ──── 标记（针）通用样式 ──── */
+/* --marker-left 和 --pin-color 由 React 通过 style 属性传入 */
+.weight-ruler__marker {
+  position: absolute;
+  top: 50%;
+  left: var(--marker-left, 50%);
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  cursor: default;
+  z-index: 10;
+}
+
+/* 指示三角针：颜色由 --pin-color CSS 变量驱动 */
+.weight-ruler__pin {
+  width: 0;
+  height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-bottom: 10px solid var(--pin-color, hsl(195, 80%, 65%));
+  filter: drop-shadow(0 0 3px rgba(255, 255, 255, 0.3));
+  transition: transform 0.2s ease;
+}
+
+.weight-ruler__marker:hover .weight-ruler__pin {
+  transform: scaleY(1.15);
+}
+
+/* 悬浮 Tooltip */
+.weight-ruler__tooltip {
+  position: absolute;
+  bottom: calc(100% + 14px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  background: hsl(220, 20%, 16%);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  padding: 5px 8px;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  z-index: 100;
+  /* 小三角 */
+  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.4));
+}
+
+.weight-ruler__marker:hover .weight-ruler__tooltip {
+  display: flex;
+}
+
+/* Tooltip 内部小三角尾巴 */
+.weight-ruler__tooltip--top::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 0;
+  height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 5px solid hsl(220, 20%, 16%);
+}
+
+.weight-ruler__tooltip-badge {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: hsl(195, 80%, 65%);
+  color: #0d1117;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+.weight-ruler__tooltip-badge--heavy {
+  background: hsl(0, 80%, 60%);
+  color: #fff;
+}
+
+.weight-ruler__tooltip-name {
+  font-size: 10px;
+  color: hsl(220, 10%, 90%);
+  font-weight: 500;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.weight-ruler__tooltip-value {
+  font-size: 11px;
+  font-weight: 700;
+  color: hsl(220, 10%, 98%);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ──── 右侧元信息 ──── */
+.weight-ruler__meta {
+  flex-shrink: 0;
+  white-space: nowrap;
+  color: hsl(220, 10%, 55%);
+  font-size: 10px;
+}
+
+.weight-ruler__cargo-count {
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 4px;
+  padding: 2px 6px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}

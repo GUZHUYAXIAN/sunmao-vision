@@ -54,8 +54,8 @@ export const SolveRequestSchema = z.object({
   containers: z.array(ContainerSchema).min(1),
   /** 至少一种货物 */
   cargoList: z.array(CargoTemplateSchema).min(1),
-  /** 扎带配置 */
-  lashing: LashingConfigSchema,
+  /** 扎带配置（可选；不传时不计算扎带重量） */
+  lashing: LashingConfigSchema.optional(),
   /** 求解约束条件 */
   constraints: SolveConstraintsSchema,
 });

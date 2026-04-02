@@ -33,8 +33,10 @@ import { type Aabb, aabbVolume } from "./geometry";
 export function estimateLashingWeight(
   placedCount: number,
   placedAabbs: ReadonlyArray<Aabb>,
-  lashingConfig: LashingConfig,
+  lashingConfig: LashingConfig | undefined,
 ): number {
+  // 未配置扎带规格时，扎带重量为 0
+  if (lashingConfig === undefined) return 0;
   if (placedCount === 0) return 0;
 
   const strapping = lashingConfig.strapping;
@@ -83,7 +85,7 @@ export function computeContainerStats(
   placedItems: ReadonlyArray<{ cargoIndex: number }>,
   placedAabbs: ReadonlyArray<Aabb>,
   templateMap: ReadonlyMap<number, CargoTemplate>,
-  lashingConfig: LashingConfig,
+  lashingConfig: LashingConfig | undefined,
 ): ContainerStats {
   const itemCount = placedItems.length;
 

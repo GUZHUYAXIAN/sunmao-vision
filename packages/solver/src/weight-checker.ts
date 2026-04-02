@@ -125,10 +125,17 @@ export function computeBottomSupportCheck(
   };
 }
 
+/**
+ * 底面支撑率阈值：货物底面至少需要被下方支撑面覆盖的比例。
+ * 物理依据：行业通行标准要求底面重心必须在支撑投影内，且接触面积不低于 70%，
+ * 以防止货物在运输振动中倾倒。强制要求 100% 会错误地拒绝桥接式放置。
+ */
+export const MINIMUM_BOTTOM_SUPPORT_RATIO = 0.7;
+
 export function hasSufficientBottomSupport(
   box: Aabb,
   occupiedAabbs: readonly Aabb[],
-  minimumSupportRatio = 1,
+  minimumSupportRatio = MINIMUM_BOTTOM_SUPPORT_RATIO,
 ): boolean {
   const supportCheck = computeBottomSupportCheck(box, occupiedAabbs);
   return (

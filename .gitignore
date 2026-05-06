@@ -28,8 +28,12 @@ Thumbs.db
 
 # Logs
 *.log
+lint-output.txt
 npm-debug.log*
 pnpm-debug.log*
+
+# Lockfiles
+package-lock.json
 
 # Test coverage
 coverage/

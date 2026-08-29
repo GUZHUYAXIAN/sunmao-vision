@@ -90,8 +90,8 @@ sunmao-vision/
 - [x] M1: 数据契约实现 (`packages/contracts`, Zod Schemas)
 - [x] M2: 求解器核心 (`packages/solver`, 策略模式可插拔算法)
 - [x] M3: 3D 视口与渲染 (Three.js Viewport)
-- [ ] M4: 交互功能完善 ← 进行中 (AppShell / 拖拽交互)
-- [ ] M5: 导出与打磨 (Excel 导出 / 扎带方案 / PDF→OBJ)
+- [ ] M4: 交互功能完善 ← 进行中 (AppShell / 拖拽交互 / 撤销重做 ✅)
+- [ ] M5: 导出与打磨 ← 进行中 (扎带方案 ✅ / Excel 导出 ✅ / PDF→OBJ 未开始)
 
 > 📍 详见 [实施路线图](./doc/architecture/05-implementation-roadmap.md)
 

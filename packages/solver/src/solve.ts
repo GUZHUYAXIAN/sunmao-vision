@@ -25,6 +25,7 @@ import {
 } from "@sunmao/contracts";
 
 import { type Aabb } from "./geometry";
+import { generateContainerLashingPlan } from "./lashing";
 import { type EngineConfig, packIntoContainer } from "./placement-engine";
 import { sortCargoByVolumeAndWeight } from "./sorting";
 import { computeContainerStats, computeGlobalStats } from "./statistics";
@@ -81,6 +82,7 @@ export function solve(request: SolveRequest): SolveResult {
   const allPlacedAabbs: Aabb[] = [];
   const allUnplaced: SolveResult["unplacedItems"] = [];
   const allWarnings: SolveResult["warnings"] = [];
+  const lashingPlans: SolveResult["lashingPlan"] = [];
 
   // 构建 templateMap 供后续校验函数使用
   const templateMap = new Map<number, CargoTemplate>(
@@ -159,6 +161,35 @@ export function solve(request: SolveRequest): SolveResult {
     );
     perContainerStats.push(stats);
 
+    // 扎带方案生成（未配置扎带规格时跳过）
+    if (request.lashing) {
+      const { plan, underSecuredItemCount } = generateContainerLashingPlan(
+        container.id,
+        container.width,
+        containerPlacements,
+        containerAabbs,
+        templateMap,
+        request.lashing,
+      );
+      lashingPlans.push(plan);
+
+      if (underSecuredItemCount > 0) {
+        const blockedTemplateIds = [
+          ...new Set(
+            containerPlacedItems
+              .map((placedItem) => templateMap.get(placedItem.cargoIndex)?.id)
+              .filter((id): id is string => id !== undefined),
+          ),
+        ];
+        allWarnings.push({
+          code: "LASHING_POSITION_BLOCKED",
+          message: `本箱有 ${underSecuredItemCount} 件货物因相邻货物阻挡无法打满围带，建议人工加固或调整装载顺序。`,
+          severity: "warning",
+          relatedItems: blockedTemplateIds,
+        });
+      }
+    }
+
     // 对每种货物，按其 unplaced 数量计算剩余待放数量，留给下一个集装箱继续尝试
     const nextRemaining: IndexedCargo[] = [];
     for (const cargo of remainingCargo) {
@@ -202,7 +233,7 @@ export function solve(request: SolveRequest): SolveResult {
     success: allUnplaced.length === 0,
     placements: allPlacements,
     unplacedItems: allUnplaced,
-    lashingPlan: [], // M3 里程碑实现：扎带路径规划
+    lashingPlan: lashingPlans,
     statistics: {
       perContainer: perContainerStats,
       totalNetWeight: globalStats.totalNetWeight,

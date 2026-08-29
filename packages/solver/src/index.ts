@@ -14,6 +14,7 @@
  *   - placement-engine      — 主放置循环（策略注入点）
  *   - weight-checker        — 重量/重心校验
  *   - statistics            — 装载统计计算
+ *   - lashing               — 扎带固定方案生成（围带 + 拉紧器路径）
  *   - strategy              — PlacementStrategy 可插拔接口
  *   - guillotine-strategy   — Guillotine 切割默认策略
  *   - spiral-strategy       — 螺旋搜索策略
@@ -60,6 +61,9 @@ export {
   computeContainerStats,
   computeGlobalStats,
 } from "./statistics";
+
+export type { LashingPlanResult } from "./lashing";
+export { generateContainerLashingPlan } from "./lashing";
 
 // ── 策略模式（Strategy Pattern）可插拔放置算法 ────────────────────────────
 export type {

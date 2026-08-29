@@ -15,6 +15,9 @@ function generateUUID(): string {
 
 type SelectionUpdater = (prevIds: Set<string>) => Set<string>;
 
+/** 历史栈上限（防止长会话内存无限增长） */
+const MAX_HISTORY = 50;
+
 /** 允许对货物模板进行局部更新的字段集合 */
 export interface CargoUpdatePatch {
   weight?: number;
@@ -39,6 +42,14 @@ interface ProjectStore {
   selectedIds: Set<string>;
   /** 解算是否正在进行中（防止重复触发） */
   isSolving: boolean;
+  /** 撤销栈：历史上的 project 快照（最新在末尾） */
+  past: SolveRequest[];
+  /** 重做栈：被撤销的 project 快照（最新在开头） */
+  future: SolveRequest[];
+  /** 撤销上一次会改变 project 的操作（重新推演） */
+  undo: () => void;
+  /** 重做下一次被撤销的操作（重新推演） */
+  redo: () => void;
   /** 设置/更新选中集合。支持直接传入 Set，或传入 updater 函数（类似 React setState） */
   setSelection: (ids: Set<string> | SelectionUpdater) => void;
   updateProject: (project: SolveRequest) => void;
@@ -102,11 +113,59 @@ function runSolveAndCommit(
   }
 }
 
+/**
+ * 生成带历史快照的状态片段：当前 project 入撤销栈、清空重做栈、写入新 project。
+ * 所有"会改变 project 的用户操作"都必须经过它，undo/redo 才能完整回放。
+ */
+function withHistory(
+  state: Pick<ProjectStore, 'project' | 'past' | 'future'>,
+  updatedProject: SolveRequest
+): Pick<ProjectStore, 'project' | 'past' | 'future'> {
+  return {
+    past: [...state.past, state.project].slice(-MAX_HISTORY),
+    future: [],
+    project: updatedProject,
+  };
+}
+
 export const useProjectStore = create<ProjectStore>((set, get) => ({
   project: mockRequest,
   solveResult: null,
   selectedIds: new Set(),
   isSolving: false,
+  past: [],
+  future: [],
+
+  undo: () => {
+    const { past, future, project, isSolving } = get();
+    if (past.length === 0 || isSolving) return;
+
+    const previous = past[past.length - 1];
+    set({
+      past: past.slice(0, -1),
+      future: [project, ...future],
+      project: previous,
+      isSolving: true,
+      // 历史回放后实例 ID 集合可能变化，清空选中避免悬空引用
+      selectedIds: new Set(),
+    });
+    runSolveAndCommit(previous, set);
+  },
+
+  redo: () => {
+    const { past, future, project, isSolving } = get();
+    if (future.length === 0 || isSolving) return;
+
+    const next = future[0];
+    set({
+      past: [...past, project].slice(-MAX_HISTORY),
+      future: future.slice(1),
+      project: next,
+      isSolving: true,
+      selectedIds: new Set(),
+    });
+    runSolveAndCommit(next, set);
+  },
 
   setSelection: (ids) => {
     if (typeof ids === 'function') {
@@ -137,11 +196,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     const [movedItem] = newCargoList.splice(fromIndex, 1);
     newCargoList.splice(toIndex, 0, movedItem);
 
-    set({
-      project: { ...project, cargoList: newCargoList },
+    set((state) => ({
+      ...withHistory(state, { ...project, cargoList: newCargoList }),
       // 清空选中，避免 cargoIndex 映射错位
       selectedIds: new Set(),
-    });
+    }));
   },
 
   // ── 缺陷 1 修复：Fork 机制 ─────────────────────────────────────────────────
@@ -189,7 +248,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     };
 
     // ④ 先更新 project + 标记推演中，再触发 solve
-    set({ project: updatedProject, isSolving: true, selectedIds: new Set() });
+    set((state) => ({
+      ...withHistory(state, updatedProject),
+      isSolving: true,
+      selectedIds: new Set(),
+    }));
     runSolveAndCommit(updatedProject, set);
   },
 
@@ -214,7 +277,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       cargoList: updatedCargoList,
     };
 
-    set({ project: updatedProject, isSolving: true });
+    set((state) => ({
+      ...withHistory(state, updatedProject),
+      isSolving: true,
+    }));
     runSolveAndCommit(updatedProject, set);
   },
 
@@ -236,7 +302,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       containers: [...project.containers, newContainer],
     };
 
-    set({ project: updatedProject, isSolving: true });
+    set((state) => ({
+      ...withHistory(state, updatedProject),
+      isSolving: true,
+    }));
     runSolveAndCommit(updatedProject, set);
   },
 
@@ -257,7 +326,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     };
 
     // 清空选中（防止访问已删除集装箱的 ID）
-    set({ project: updatedProject, isSolving: true, selectedIds: new Set() });
+    set((state) => ({
+      ...withHistory(state, updatedProject),
+      isSolving: true,
+      selectedIds: new Set(),
+    }));
     runSolveAndCommit(updatedProject, set);
   },
 
@@ -281,7 +354,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       containers: updatedContainers,
     };
 
-    set({ project: updatedProject, isSolving: true });
+    set((state) => ({
+      ...withHistory(state, updatedProject),
+      isSolving: true,
+    }));
     runSolveAndCommit(updatedProject, set);
   },
 }));

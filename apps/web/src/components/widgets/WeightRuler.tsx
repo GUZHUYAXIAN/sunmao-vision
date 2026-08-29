@@ -37,7 +37,6 @@ const WeightMarker: React.FC<MarkerProps> = ({
   titleText,
 }) => {
   // CSS 自定义属性只能通过 style 属性动态注入，这是有意为之的合法用法
-  // eslint-disable-next-line react/forbid-component-props
   const markerCssVars = {
     '--marker-left': `${positionPercent}%`,
     '--pin-color': pinColor,
@@ -46,7 +45,6 @@ const WeightMarker: React.FC<MarkerProps> = ({
   return (
     <div
       className={`weight-ruler__marker ${markerClass}`}
-      /* eslint-disable-next-line react/forbid-dom-props */
       style={markerCssVars}
       title={titleText}
     >

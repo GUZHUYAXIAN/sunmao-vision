@@ -86,12 +86,12 @@ sunmao-vision/
 - [x] 前端交互规范设计
 - [x] 实施路线图制定
 - [x] 开源社区基石文档
-- [ ] **M0: 基础设施搭建** ← 即将开始
-- [ ] M1: 数据契约实现
-- [ ] M2: 求解器核心
-- [ ] M3: 3D 视口与渲染
-- [ ] M4: 交互功能完善
-- [ ] M5: 导出与打磨
+- [x] **M0: 基础设施搭建** (Monorepo / ESLint / TypeScript)
+- [x] M1: 数据契约实现 (`packages/contracts`, Zod Schemas)
+- [x] M2: 求解器核心 (`packages/solver`, 策略模式可插拔算法)
+- [x] M3: 3D 视口与渲染 (Three.js Viewport)
+- [ ] M4: 交互功能完善 ← 进行中 (AppShell / 拖拽交互)
+- [ ] M5: 导出与打磨 (Excel 导出 / 扎带方案 / PDF→OBJ)
 
 > 📍 详见 [实施路线图](./doc/architecture/05-implementation-roadmap.md)
 

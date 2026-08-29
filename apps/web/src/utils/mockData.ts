@@ -1,4 +1,4 @@
-import { SolveRequest } from "@sunmao/contracts";
+import type { SolveRequest } from "@sunmao/contracts";
 
 export const mockRequest: SolveRequest = {
   containers: [

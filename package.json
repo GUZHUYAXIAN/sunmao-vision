@@ -7,7 +7,7 @@
   "author": "Sunmao Vision Contributors",
   "repository": {
     "type": "git",
-    "url": "https://github.com/your-username/sunmao-vision.git"
+    "url": "https://github.com/GUZHUYAXIAN/sunmao-vision.git"
   },
   "scripts": {
     "dev": "pnpm --filter @sunmao/web dev",

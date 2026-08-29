@@ -21,6 +21,9 @@ packages/*/src/**/*.d.ts.map
 .DS_Store
 Thumbs.db
 
+# Agent tool state (omx)
+.omx/
+
 # Environment
 .env
 .env.local

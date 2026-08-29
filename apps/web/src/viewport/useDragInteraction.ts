@@ -6,7 +6,8 @@
  *   - 松手后: 将 mesh 归位到 solver 决定的位置（探索性拖拽）
  *
  * 碰撞检测: 使用 @sunmao/solver 的 aabbIntersects 纯函数（AABB 算法）
- * 网格吸附: 以 GRID_SNAP_MM 为步长吸附到物理网格
+ * 网格吸附: 按住 Shift 时以 GRID_SNAP_MM 为步长吸附到物理网格（对齐旧版 BoxStack 行为）
+ * 边界约束: 候选位置钳制在所属集装箱内边界内，禁止拖出箱体
  * 坐标系:  所有 dragPlane / AABB 运算均在世界坐标系中完成
  */
 
@@ -14,6 +15,7 @@ import { useRef, useCallback } from 'react';
 import * as THREE from 'three';
 import { makeAabb, aabbIntersects } from '@sunmao/solver';
 import type { Aabb } from '@sunmao/solver';
+import { useProjectStore } from '../stores/useProjectStore';
 
 /** 网格吸附步长（mm） */
 const GRID_SNAP_MM = 50;
@@ -50,6 +52,8 @@ interface DragSession {
   hasExceededThreshold: boolean;
   /** 当前是否处于碰撞状态 */
   isColliding: boolean;
+  /** 所属集装箱的内边界尺寸（mm），找不到时为 null（不钳制） */
+  containerDims: { length: number; width: number } | null;
   /** 父节点（用于坐标转换） */
   parent: THREE.Object3D;
 }
@@ -66,8 +70,60 @@ function computeNDC(event: PointerEvent, domElement: HTMLElement): THREE.Vector2
   );
 }
 
-function snapToGrid(value: number): number {
+export function snapToGrid(value: number): number {
   return Math.round(value / GRID_SNAP_MM) * GRID_SNAP_MM;
+}
+
+/** 集装箱水平内边界（世界坐标系）。containerRoot 无旋转，其 position 即箱体原点偏移 */
+export interface ContainerBounds2D {
+  originX: number;
+  originZ: number;
+  length: number;
+  width: number;
+}
+
+/**
+ * 将货物中心点钳制在集装箱内边界内（XZ 平面）。
+ * 若货物比集装箱还大（min > max），钳制到中点，保证行为确定。
+ */
+export function clampToContainerBounds(
+  x: number,
+  z: number,
+  halfExtentX: number,
+  halfExtentZ: number,
+  bounds: ContainerBounds2D,
+): { x: number; z: number } {
+  const minX = bounds.originX + halfExtentX;
+  const maxX = bounds.originX + bounds.length - halfExtentX;
+  const minZ = bounds.originZ + halfExtentZ;
+  const maxZ = bounds.originZ + bounds.width - halfExtentZ;
+
+  const clamp = (value: number, lo: number, hi: number) =>
+    Math.min(Math.max(value, Math.min(lo, hi)), Math.max(lo, hi));
+
+  return { x: clamp(x, minX, maxX), z: clamp(z, minZ, maxZ) };
+}
+
+/** 从 cargo 所在的父节点向下查找集装箱拾取 Mesh 携带的 containerId */
+function findContainerId(containerRoot: THREE.Object3D): string | null {
+  let found: string | null = null;
+  containerRoot.traverse((obj) => {
+    if (found) return;
+    if (obj.userData?.isContainer) {
+      found = (obj.userData.containerId as string) ?? null;
+    }
+  });
+  return found;
+}
+
+/** 根据 containerId 从项目状态查询集装箱水平尺寸 */
+function lookupContainerDims(containerId: string | null): { length: number; width: number } | null {
+  if (!containerId) return null;
+  const container = useProjectStore
+    .getState()
+    .project.containers.find((c) => c.id === containerId);
+  if (!container) return null;
+  return { length: container.length, width: container.width };
 }
 
 /** 收集场景中排除指定货物后的所有 AABB（世界坐标系） */
@@ -210,6 +266,7 @@ export function useDragInteraction(
         pointerStart: { x: event.clientX, y: event.clientY },
         hasExceededThreshold: false,
         isColliding: false,
+        containerDims: lookupContainerDims(findContainerId(hitMesh.parent)),
         parent: hitMesh.parent,
       };
 
@@ -250,16 +307,38 @@ export function useDragInteraction(
       // 射线与拖拽平面求交
       if (!raycaster.current.ray.intersectPlane(drag.dragPlane, planeHit.current)) return;
 
-      // 世界坐标目标位置（含网格吸附）
-      const worldTargetX = snapToGrid(planeHit.current.x - drag.dragOffset.x);
-      const worldTargetZ = snapToGrid(planeHit.current.z - drag.dragOffset.z);
+      // 世界坐标目标位置：按住 Shift 时吸附网格，否则自由移动（对齐旧版 BoxStack）
+      const rawX = planeHit.current.x - drag.dragOffset.x;
+      const rawZ = planeHit.current.z - drag.dragOffset.z;
+      const worldTargetX = event.shiftKey ? snapToGrid(rawX) : rawX;
+      const worldTargetZ = event.shiftKey ? snapToGrid(rawZ) : rawZ;
       const worldTargetY = drag.dragPlane.constant * -1 + drag.halfExtents.y;
+
+      // 集装箱内边界钳制：禁止把货物拖出箱体
+      let candidateX = worldTargetX;
+      let candidateZ = worldTargetZ;
+      if (drag.containerDims) {
+        const clamped = clampToContainerBounds(
+          worldTargetX,
+          worldTargetZ,
+          drag.halfExtents.x,
+          drag.halfExtents.z,
+          {
+            originX: drag.parent.position.x,
+            originZ: drag.parent.position.z,
+            length: drag.containerDims.length,
+            width: drag.containerDims.width,
+          },
+        );
+        candidateX = clamped.x;
+        candidateZ = clamped.z;
+      }
 
       // 构建候选 AABB（世界坐标系）
       const candidateAabb = makeAabb(
-        worldTargetX - drag.halfExtents.x,
+        candidateX - drag.halfExtents.x,
         worldTargetY - drag.halfExtents.y,
-        worldTargetZ - drag.halfExtents.z,
+        candidateZ - drag.halfExtents.z,
         drag.halfExtents.x * 2,
         drag.halfExtents.y * 2,
         drag.halfExtents.z * 2,
@@ -270,10 +349,10 @@ export function useDragInteraction(
 
       if (!nowColliding) {
         // 将世界坐标转换为父节点本地坐标后设置 position
-        const localTarget = new THREE.Vector3(worldTargetX, worldTargetY, worldTargetZ);
+        const localTarget = new THREE.Vector3(candidateX, worldTargetY, candidateZ);
         drag.parent.worldToLocal(localTarget);
         drag.cargoMesh.position.copy(localTarget);
-        drag.lastValidWorldPos.set(worldTargetX, worldTargetY, worldTargetZ);
+        drag.lastValidWorldPos.set(candidateX, worldTargetY, candidateZ);
       }
 
       // 仅在碰撞状态变化时更新 emissive（避免每帧 needsUpdate）
